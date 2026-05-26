@@ -264,7 +264,7 @@ PIR-detected spends appear as synthetic "detected spend" entries in the transact
 
 ## Method (volume analysis)
 
-The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`zec.rocks:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions (= number of nullifiers).
+The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`us.zec.stardust.rest:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions (= number of nullifiers).
 
 | Metric | Value |
 |--------|-------|

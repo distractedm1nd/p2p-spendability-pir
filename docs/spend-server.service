@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/spend-server
 ExecStart=/opt/spend-server/spend-server \
-    --lwd-url https://zec.rocks:443 \
+    --lwd-url https://us.zec.stardust.rest:443 \
     --data-dir /opt/spend-server/data \
     --listen 127.0.0.1:8080
 Restart=on-failure

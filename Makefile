@@ -6,10 +6,10 @@
 #
 # Usage: make build && make run
 
-# ── Configuration (override with env vars) ───────────────────────────
+# ── Configuration ────────────────────────────────────────────────────
 DATA_DIR  ?= ./data
-LWD_URL   ?= https://zec.rocks:443
 LISTEN    ?= 0.0.0.0:8080
+LWD_URL   := https://us.zec.stardust.rest:443
 
 # ── Targets ──────────────────────────────────────────────────────────
 

@@ -407,7 +407,7 @@ Before any wallet integration, the PIR witness system must pass an end-to-end te
 
 Validates tree construction, sub-shard decomposition, and witness reconstruction without YPIR overhead. Uses `pir_stub` (direct row retrieval by index) instead of encrypted queries.
 
-1. **Ingest**: `commitment-ingest` syncs the Orchard note commitment tree from lightwalletd (`zec.rocks:443`) up to a target height H.
+1. **Ingest**: `commitment-ingest` syncs the Orchard note commitment tree from lightwalletd (`us.zec.stardust.rest:443`) up to a target height H.
 2. **Pick a real note**: Choose a known Orchard note commitment at a known tree position P. Extract from a specific compact block's `CompactOrchardAction.cmx`, compute P from the previous block's `orchardCommitmentTreeSize` plus the action's index within the block.
 3. **Build database**: `commitment-tree-db` builds the tree, produces broadcast data and raw PIR row bytes.
 4. **Stub retrieval**: Look up the sub-shard row directly by physical index (no YPIR encode/decode). Reconstruct the full 32-sibling authentication path from broadcast + raw row data.

@@ -17,7 +17,7 @@
 //! - the test derives its oracle from raw lightwalletd data instead of
 //!   trusting the server's own in-memory tree.
 //!
-//! Requires network access to `zec.rocks:443`.
+//! Requires network access to lightwalletd.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -40,7 +40,7 @@ use ypir::client::YPIRClient;
 use ypir::params::params_for_scenario_simplepir;
 use ypir::serialize::ToBytes;
 
-const LWD_ENDPOINT: &str = "https://zec.rocks:443";
+const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
 const ORCHARD_PROTOCOL: i32 = 1;
 const TEST_WINDOW_SHARD_LIMIT: usize = 2;
 

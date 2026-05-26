@@ -22,7 +22,7 @@
 //! cap tree (levels 16–31), frontier sub-shard handling, and broadcast
 //! data consistency.
 //!
-//! Both tests require network access to `zec.rocks:443`.
+//! Both tests require network access to lightwalletd.
 
 use chain_ingest::LwdClient;
 use commitment_ingest::extract_commitments;
@@ -31,7 +31,7 @@ use incrementalmerkletree::{Hashable, Level};
 use orchard::tree::MerkleHashOrchard;
 use witness_types::*;
 
-const LWD_ENDPOINT: &str = "https://zec.rocks:443";
+const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
 const ORCHARD_PROTOCOL: i32 = 1;
 const BATCH_SIZE: u64 = 10_000;
 const FRONTIER_BLOCKS: u64 = 200;
