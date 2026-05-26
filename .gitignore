@@ -5,3 +5,11 @@
 /.protoc
 monitor.log
 monitor.sh
+
+# Terraform local state and secrets
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/*.tfvars
+!**/*.tfvars.example
+**/*.tfplan
