@@ -6,7 +6,6 @@ edition = "2021"
 [[bin]]
 name = "spend-server"
 path = "src/main.rs"
-required-features = ["ypir"]
 
 [features]
 default = ["nullifier", "witness"]
@@ -23,6 +22,7 @@ witness = [
     "dep:commitment-tree-db",
 ]
 ypir = ["spend-server?/ypir", "witness-server?/ypir"]
+ipir = ["spend-server?/ipir", "witness-server?/ipir"]
 
 [dependencies]
 spend-server = { path = "../nullifier/spend-server", optional = true }

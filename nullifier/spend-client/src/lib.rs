@@ -1,9 +1,18 @@
+#[cfg(feature = "ipir")]
+use ipir_sp::serialize::serialize_packing_keys;
+#[cfg(feature = "ipir")]
+use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed};
+#[cfg(feature = "ipir")]
+use spend_types::IPIR_SETUP_SEED;
 use spend_types::{
     hash_to_bucket, SpendMetadata, SpendabilityMetadata, YpirScenario, BUCKET_BYTES, ENTRY_BYTES,
 };
 use thiserror::Error;
+#[cfg(not(feature = "ipir"))]
 use ypir::client::YPIRClient;
+#[cfg(not(feature = "ipir"))]
 use ypir::params::params_for_scenario_simplepir;
+#[cfg(not(feature = "ipir"))]
 use ypir::serialize::ToBytes;
 
 #[derive(Error, Debug)]
@@ -25,11 +34,20 @@ pub struct SpendClient {
     base_url: String,
     scenario: YpirScenario,
     metadata: SpendabilityMetadata,
+    #[cfg(feature = "ipir")]
+    ipir_client: IpirClientState,
+    #[cfg(not(feature = "ipir"))]
     ypir_client: YPIRClient,
 }
 
+#[cfg(feature = "ipir")]
+struct IpirClientState {
+    client: IPIRClient,
+    offline_query_polys: Vec<Vec<u64>>,
+}
+
 impl SpendClient {
-    /// Connect to a spend-server, fetch params and metadata, initialize the YPIR client.
+    /// Connect to a spend-server, fetch params and metadata, initialize the PIR client.
     pub async fn connect(url: &str) -> Result<Self> {
         let base_url = url.trim_end_matches('/').to_string();
         let http = reqwest::Client::new();
@@ -57,8 +75,23 @@ impl SpendClient {
             )));
         }
 
-        let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
-        let ypir_client = YPIRClient::new(&params);
+        #[cfg(feature = "ipir")]
+        let ipir_client = {
+            let (rlwe, ypir) = params_for_simplepir(scenario.num_items, scenario.item_size_bits)
+                .map_err(|e| SpendClientError::InvalidParams(e.to_string()))?;
+            let client = IPIRClient::new(&rlwe, &ypir);
+            let offline_query_polys =
+                client.generate_public_query_setup_simplepir_from_seed(IPIR_SETUP_SEED);
+            IpirClientState {
+                client,
+                offline_query_polys,
+            }
+        };
+        #[cfg(not(feature = "ipir"))]
+        let ypir_client = {
+            let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+            YPIRClient::new(&params)
+        };
 
         tracing::info!(
             base_url,
@@ -73,6 +106,9 @@ impl SpendClient {
             base_url,
             scenario,
             metadata,
+            #[cfg(feature = "ipir")]
+            ipir_client,
+            #[cfg(not(feature = "ipir"))]
             ypir_client,
         })
     }
@@ -81,8 +117,13 @@ impl SpendClient {
     pub async fn is_spent(&self, nf: &[u8; 32]) -> Result<Option<SpendMetadata>> {
         let bucket_idx = hash_to_bucket(nf) as usize;
 
-        let (query, seed) = self.ypir_client.generate_query_simplepir(bucket_idx);
-        let query_bytes = query.to_bytes();
+        #[cfg(feature = "ipir")]
+        let (query_bytes, seed) = self.generate_ipir_query(bucket_idx)?;
+        #[cfg(not(feature = "ipir"))]
+        let (query_bytes, seed) = {
+            let (query, seed) = self.ypir_client.generate_query_simplepir(bucket_idx);
+            (query.to_bytes(), seed)
+        };
 
         let resp = self
             .http
@@ -101,11 +142,34 @@ impl SpendClient {
             .bytes()
             .await?;
 
+        #[cfg(feature = "ipir")]
+        let decoded = self.decode_ipir_response(seed, &response_bytes);
+        #[cfg(not(feature = "ipir"))]
         let decoded = self
             .ypir_client
             .decode_response_simplepir(seed, &response_bytes);
 
         Ok(scan_bucket_for_nf(&decoded, nf))
+    }
+
+    #[cfg(feature = "ipir")]
+    fn generate_ipir_query(&self, bucket_idx: usize) -> Result<(Vec<u8>, IPIRSeed)> {
+        let (query, packing_keys, seed) = self
+            .ipir_client
+            .client
+            .generate_fresh_query_simplepir(&self.ipir_client.offline_query_polys, bucket_idx);
+        let mut query_bytes =
+            serialize_packing_keys(self.ipir_client.client.rlwe_params(), &packing_keys)
+                .map_err(|e| SpendClientError::QueryFailed(e.to_string()))?;
+        query_bytes.extend(query.to_packed_bytes(self.ipir_client.client.rlwe_params().q));
+        Ok((query_bytes, seed))
+    }
+
+    #[cfg(feature = "ipir")]
+    fn decode_ipir_response(&self, seed: IPIRSeed, response_bytes: &[u8]) -> Vec<u8> {
+        self.ipir_client
+            .client
+            .decode_response_simplepir(seed, response_bytes)
     }
 
     /// Re-fetch metadata from the server to get updated heights.

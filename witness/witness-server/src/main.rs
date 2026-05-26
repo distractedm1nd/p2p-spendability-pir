@@ -4,15 +4,21 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
-use witness_server::pir_ypir::YpirPirEngine;
 use witness_server::server;
 use witness_server::state::{ServerConfig, DEFAULT_WINDOW_SHARD_LIMIT};
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
+#[cfg(feature = "ipir")]
+use witness_server::pir_ipir::IpirPirEngine as SelectedPirEngine;
+#[cfg(not(any(feature = "ipir", feature = "ypir")))]
+use witness_server::pir_stub::StubPirEngine as SelectedPirEngine;
+#[cfg(all(not(feature = "ipir"), feature = "ypir"))]
+use witness_server::pir_ypir::YpirPirEngine as SelectedPirEngine;
+
 #[derive(Parser)]
 #[command(
     name = "witness-server",
-    about = "Private note commitment witness server using YPIR"
+    about = "Private note commitment witness server"
 )]
 struct Cli {
     /// Directory for snapshots
@@ -68,7 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_items: L0_DB_ROWS as u64,
         item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
     };
-    let engine = Arc::new(YpirPirEngine::new(&scenario));
+    #[cfg(feature = "ipir")]
+    let engine = Arc::new(SelectedPirEngine::new(&scenario)?);
+    #[cfg(all(not(feature = "ipir"), feature = "ypir"))]
+    let engine = Arc::new(SelectedPirEngine::new(&scenario));
+    #[cfg(not(any(feature = "ipir", feature = "ypir")))]
+    let engine = Arc::new(SelectedPirEngine);
 
     server::run(config, engine).await?;
 

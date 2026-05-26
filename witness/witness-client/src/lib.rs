@@ -1,8 +1,17 @@
+#[cfg(feature = "ipir")]
+use ipir_sp::serialize::serialize_packing_keys;
+#[cfg(feature = "ipir")]
+use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed};
 use pir_types::YpirScenario;
+#[cfg(feature = "ipir")]
+use pir_types::IPIR_SETUP_SEED;
 use thiserror::Error;
 use witness_types::*;
+#[cfg(not(feature = "ipir"))]
 use ypir::client::YPIRClient;
+#[cfg(not(feature = "ipir"))]
 use ypir::params::params_for_scenario_simplepir;
+#[cfg(not(feature = "ipir"))]
 use ypir::serialize::ToBytes;
 
 pub mod reconstruct;
@@ -31,12 +40,21 @@ pub struct WitnessClient {
     #[allow(dead_code)]
     scenario: YpirScenario,
     broadcast: BroadcastData,
+    #[cfg(feature = "ipir")]
+    ipir_client: IpirClientState,
+    #[cfg(not(feature = "ipir"))]
     ypir_client: YPIRClient,
+}
+
+#[cfg(feature = "ipir")]
+struct IpirClientState {
+    client: IPIRClient,
+    offline_query_polys: Vec<Vec<u64>>,
 }
 
 impl WitnessClient {
     /// Connect to a witness-server, fetch params and broadcast data, initialize
-    /// the YPIR client. The broadcast download is ~104 KB and cached for the
+    /// the PIR client. The broadcast download is ~104 KB and cached for the
     /// lifetime of this client.
     pub async fn connect(url: &str) -> Result<Self> {
         let t0 = std::time::Instant::now();
@@ -65,13 +83,28 @@ impl WitnessClient {
         );
 
         let t2 = std::time::Instant::now();
-        let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
-        let ypir_client = YPIRClient::new(&params);
+        #[cfg(feature = "ipir")]
+        let ipir_client = {
+            let (rlwe, ypir) = params_for_simplepir(scenario.num_items, scenario.item_size_bits)
+                .map_err(|e| WitnessClientError::InvalidParams(e.to_string()))?;
+            let client = IPIRClient::new(&rlwe, &ypir);
+            let offline_query_polys =
+                client.generate_public_query_setup_simplepir_from_seed(IPIR_SETUP_SEED);
+            IpirClientState {
+                client,
+                offline_query_polys,
+            }
+        };
+        #[cfg(not(feature = "ipir"))]
+        let ypir_client = {
+            let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+            YPIRClient::new(&params)
+        };
         tracing::info!(
             elapsed_ms = t2.elapsed().as_millis(),
             num_items = scenario.num_items,
             item_size_bits = scenario.item_size_bits,
-            "YPIRClient initialized",
+            "PIR client initialized",
         );
 
         tracing::info!(
@@ -89,13 +122,16 @@ impl WitnessClient {
             base_url,
             scenario,
             broadcast,
+            #[cfg(feature = "ipir")]
+            ipir_client,
+            #[cfg(not(feature = "ipir"))]
             ypir_client,
         })
     }
 
     /// Fetch a note commitment witness for the given tree position.
     ///
-    /// Issues a single YPIR query (~605 KB up, response ~36 KB) to retrieve the
+    /// Issues a single PIR query to retrieve the
     /// subshard row containing the note's leaf. Combines the PIR response with
     /// the cached broadcast data to reconstruct the full 32-level authentication
     /// path. Self-verifies the witness before returning.
@@ -116,8 +152,13 @@ impl WitnessClient {
             physical_row_index(shard_idx, subshard_idx, self.broadcast.window_start_shard);
 
         let t1 = std::time::Instant::now();
-        let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
-        let query_bytes = query.to_bytes();
+        #[cfg(feature = "ipir")]
+        let (query_bytes, seed) = self.generate_ipir_query(row_idx)?;
+        #[cfg(not(feature = "ipir"))]
+        let (query_bytes, seed) = {
+            let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
+            (query.to_bytes(), seed)
+        };
         tracing::info!(
             elapsed_ms = t1.elapsed().as_millis(),
             query_bytes = query_bytes.len(),
@@ -150,6 +191,9 @@ impl WitnessClient {
         );
 
         let t3 = std::time::Instant::now();
+        #[cfg(feature = "ipir")]
+        let decoded_row = self.decode_ipir_response(seed, &response_bytes);
+        #[cfg(not(feature = "ipir"))]
         let decoded_row = self
             .ypir_client
             .decode_response_simplepir(seed, &response_bytes);
@@ -176,6 +220,26 @@ impl WitnessClient {
         );
 
         Ok(witness)
+    }
+
+    #[cfg(feature = "ipir")]
+    fn generate_ipir_query(&self, row_idx: usize) -> Result<(Vec<u8>, IPIRSeed)> {
+        let (query, packing_keys, seed) = self
+            .ipir_client
+            .client
+            .generate_fresh_query_simplepir(&self.ipir_client.offline_query_polys, row_idx);
+        let mut query_bytes =
+            serialize_packing_keys(self.ipir_client.client.rlwe_params(), &packing_keys)
+                .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?;
+        query_bytes.extend(query.to_packed_bytes(self.ipir_client.client.rlwe_params().q));
+        Ok((query_bytes, seed))
+    }
+
+    #[cfg(feature = "ipir")]
+    fn decode_ipir_response(&self, seed: IPIRSeed, response_bytes: &[u8]) -> Vec<u8> {
+        self.ipir_client
+            .client
+            .decode_response_simplepir(seed, response_bytes)
     }
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).
