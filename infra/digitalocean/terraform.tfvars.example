@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars for non-secret local defaults only.
+# Keep DigitalOcean tokens in Infisical and inject TF_VAR_digitalocean_token at runtime.
+
+project_name        = "spendability-pir"
+project_environment = "Production"
+region              = "ams3"
+droplet_name        = "spendability-pir-01"
+
+# DigitalOcean's closest Premium Intel 8 vCPU / 64 GB RAM size has a 200 GB
+# NVMe boot disk. There is no exact 8 vCPU / 64 GB RAM / 100 GB Intel slug.
+droplet_size = "m-8vcpu-64gb-intel"
+
+ssh_key_fingerprints = [
+  "replace-with-digitalocean-ssh-key-fingerprint",
+]
+
+allowed_ssh_cidrs = [
+  "replace-with-admin-ip/32",
+]
