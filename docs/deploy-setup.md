@@ -103,31 +103,32 @@ In the repo: **Settings -> Secrets and variables -> Actions**, add:
 | Secret | Description |
 |--------|-------------|
 | `DEPLOY_HOST` | Remote hostname or IP (e.g. `pir.example.com` or `164.92.137.124`). If an IP, Caddy is configured with a `sslip.io` domain (e.g. `164-92-137-124.sslip.io`) for automatic TLS. If a domain name, it's used as-is. |
-| `DEPLOY_USER` | SSH user on that host (e.g. `deploy` or `ubuntu`). |
-| `SSH_PASSWORD` | SSH password for that user. |
+| `DEPLOY_USER` | SSH user on that host (for the DigitalOcean host, `deploy`). |
+| `DEPLOY_SSH_KEY` | Private SSH key authorized for `DEPLOY_USER`. |
 
 ### One-time setup on the remote host
 
 **Directory and permissions**
 
-- Create the deploy directory: `sudo mkdir -p /opt/pir-server/data`
+- Create the deploy directory: `sudo mkdir -p /opt/spend-server/data`
 - Ensure the SSH user can write to that directory.
+- Allow the SSH user to run the deployment `sudo` commands without a password.
 
 **Systemd service**
 
 The `pir-server` binary runs both nullifier and witness PIR in a single process. It needs:
 
-- **lightwalletd endpoint**: Configured via `--lwd-url` (default in the service file: `https://zec.rocks:443`).
+- **lightwalletd endpoint**: Configured via `--lwd-url` (default in the service file: `https://us.zec.stardust.rest:443`).
 - **Data directory**: For snapshots, configured via `--data-dir`. The server creates `nullifier/` and `witness/` subdirectories.
 - **Port**: Configurable via `--listen` (default `127.0.0.1:8080`, behind Caddy).
 
-A systemd unit file is provided at `docs/pir-server.service`. Copy to `/etc/systemd/system/`:
+A systemd unit file is provided at `docs/spend-server.service`. Copy to `/etc/systemd/system/`:
 
 ```bash
-sudo cp /opt/pir-server/pir-server.service /etc/systemd/system/
+sudo cp /opt/spend-server/spend-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable pir-server
-sudo systemctl start pir-server
+sudo systemctl enable spend-server
+sudo systemctl start spend-server
 ```
 
 **Caddy reverse proxy**
@@ -148,7 +149,7 @@ Ensure the server's DNS A record points to this host and that ports 80 and 443 a
 
 ### Changing deploy path or restart command
 
-- **Deploy path**: Edit the `env.DEPLOY_PATH` in `.github/workflows/deploy.yml` (default `/opt/pir-server`).
+- **Deploy path**: Edit the `env.DEPLOY_PATH` in `.github/workflows/deploy.yml` (default `/opt/spend-server`).
 - **Restart command**: Edit the "Install config and restart services" step in that workflow if you use a different service name.
 
 ### Manual runs

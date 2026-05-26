@@ -1,5 +1,5 @@
 # Deploy spend-server to a remote host on every push to main.
-# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_PASSWORD.
+# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY.
 # See docs/deploy-setup.md for one-time remote setup.
 
 name: Deploy spend-server
@@ -86,7 +86,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: "spend-server,spend-server.service,Caddyfile"
           target: ${{ env.DEPLOY_PATH }}
 
@@ -95,7 +95,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             sudo chmod +x /opt/spend-server/spend-server
             sudo cp /opt/spend-server/spend-server.service /etc/systemd/system/spend-server.service

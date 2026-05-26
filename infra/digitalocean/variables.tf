@@ -59,7 +59,7 @@ variable "allowed_ssh_cidrs" {
 variable "enable_backups" {
   description = "Enable DigitalOcean droplet backups."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "tags" {
