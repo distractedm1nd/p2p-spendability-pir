@@ -51,9 +51,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Install protoc
@@ -70,9 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: nullifier
@@ -97,9 +97,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: witness
@@ -129,9 +129,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: witness
@@ -158,9 +158,9 @@ jobs:
       PIR_TEST_DATA_DIR: /tmp/pir-test-snapshot
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -190,9 +190,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: ypir

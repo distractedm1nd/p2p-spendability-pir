@@ -15,6 +15,12 @@ pub const CONFIRMATION_DEPTH: u64 = 10;
 /// this height, so PIR ingest starts here.
 pub const NU5_MAINNET_ACTIVATION: u64 = 1_687_104;
 
+/// Public setup seed shared by IPIR-SP clients and servers.
+///
+/// The seed is not secret; it deterministically derives server-side public
+/// setup material so the existing `/params` endpoint can remain unchanged.
+pub const IPIR_SETUP_SEED: [u8; 32] = *b"spendability-pir-ipir-setup-0000";
+
 /// Server lifecycle phase, reported via `/metadata` endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ServerPhase {

@@ -23,10 +23,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Rust (nightly)
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -40,12 +40,12 @@ jobs:
             target
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-spend-server-nightly-2025-03-15-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-spend-server-rust-1.89.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-spend-server-nightly-2025-03-15-
+            ${{ runner.os }}-spend-server-rust-1.89.0-
 
       - name: Build release binary
-        run: cargo build --release -p combined-server --features ypir
+        run: cargo build --release -p combined-server --features ipir
 
       - name: Upload binary and config
         uses: actions/upload-artifact@v4

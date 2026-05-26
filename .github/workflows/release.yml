@@ -6,8 +6,8 @@
 #   spend-server-darwin-arm64,
 #   spend-server.service
 #
-# Note: darwin-amd64 is not supported because spend-server requires the ypir
-# feature (which builds C++ with -march=native) and cannot be cross-compiled.
+# Note: darwin-amd64 is not built by this workflow; release artifacts target
+# the platforms in the matrix below.
 
 name: Release
 
@@ -37,9 +37,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2025-03-15
+          toolchain: 1.89.0
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -58,7 +58,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.platform }}-spend-server-
 
       - name: Build release binary
-        run: cargo build --release -p combined-server --features ypir
+        run: cargo build --release -p combined-server --features ipir
         env:
           RUSTFLAGS: ${{ contains(matrix.platform, 'amd64') && '-C target-feature=+avx512f' || '' }}
 
