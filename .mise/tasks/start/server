@@ -35,7 +35,7 @@ if ! command -v protoc &>/dev/null && [ -z "$PROTOC" ]; then
 fi
 
 # ── Defaults ─────────────────────────────────────────────────────
-LWD_URL="${LWD_URL:-https://zec.rocks:443}"
+LWD_URL="https://us.zec.stardust.rest:443"
 DATA_DIR="${DATA_DIR:-$DIR/data}"
 LISTEN="${LISTEN:-0.0.0.0:8080}"
 

@@ -581,7 +581,7 @@ Nullifier PIR comparison: ~56 MB database / ~3.3 MB bandwidth. Witness PIR per-q
 
 ## Method (volume analysis)
 
-The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`zec.rocks:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions.
+The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`us.zec.stardust.rest:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions.
 
 | Metric | Value |
 |--------|-------|

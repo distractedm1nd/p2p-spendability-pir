@@ -13,8 +13,8 @@
 //! row-index request, reconstructs the witness client-side, and verifies
 //! the same invariants as Test A.
 //!
-//! Both tests require network access to `zec.rocks:443` and are tagged
-//! `#[ignore]` so they don't run in CI by default.
+//! Both tests require network access to lightwalletd and are tagged `#[ignore]`
+//! so they don't run in CI by default.
 
 use chain_ingest::LwdClient;
 use commitment_ingest::extract_commitments;
@@ -23,7 +23,7 @@ use pir_types::PirEngine;
 use witness_client::reconstruct::reconstruct_witness;
 use witness_types::*;
 
-const LWD_ENDPOINT: &str = "https://zec.rocks:443";
+const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
 const ORCHARD_PROTOCOL: i32 = 1;
 const BATCH_SIZE: u64 = 10_000;
 

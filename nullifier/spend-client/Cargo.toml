@@ -22,7 +22,7 @@ thiserror = "2"
 tracing = "0.1"
 
 [dev-dependencies]
-spend-server = { path = "../spend-server", features = ["ypir"] }
+spend-server = { path = "../spend-server", features = ["ypir", "ipir"] }
 hashtable-pir = { path = "../hashtable-pir" }
 nf-ingest = { path = "../nf-ingest" }
 axum = "0.7"

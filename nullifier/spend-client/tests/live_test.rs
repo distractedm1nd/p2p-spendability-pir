@@ -2,7 +2,7 @@
 //!
 //! Prerequisites:
 //!   1. Start the server: cargo run -p spend-server --features ypir --release -- \
-//!      --lwd-url https://zec.rocks:443 --data-dir ./data
+//!      --lwd-url https://us.zec.stardust.rest:443 --data-dir ./data
 //!   2. Run this test: cargo test -p spend-client --features live --test live_test -- \
 //!      --nocapture --ignored
 //!
@@ -16,7 +16,7 @@ use spend_client::SpendClient;
 use std::time::Instant;
 
 const SERVER_URL: &str = "http://127.0.0.1:8080";
-const LWD_URL: &str = "https://zec.rocks:443";
+const LWD_URL: &str = "https://us.zec.stardust.rest:443";
 
 #[tokio::test]
 #[ignore]

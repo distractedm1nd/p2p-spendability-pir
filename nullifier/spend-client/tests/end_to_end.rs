@@ -1,12 +1,15 @@
-#![cfg(feature = "ypir")]
+#![cfg(any(feature = "ypir", feature = "ipir"))]
 
 use nf_ingest::proto::compact_tx_streamer_server::{CompactTxStreamer, CompactTxStreamerServer};
 use nf_ingest::proto::*;
 use spend_client::SpendClient;
+#[cfg(feature = "ipir")]
+use spend_server::pir_ipir::IpirPirEngine;
+#[cfg(all(feature = "ypir", not(feature = "ipir")))]
 use spend_server::pir_ypir::YpirPirEngine;
 use spend_server::server::{build_router, run_sync_only};
 use spend_server::state::ServerConfig;
-use spend_types::NUM_BUCKETS;
+use spend_types::{PirEngine, YpirScenario, NUM_BUCKETS};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -254,7 +257,31 @@ fn make_compact_block(
 // ── End-to-end test ──
 
 #[tokio::test]
+#[cfg(all(feature = "ypir", not(feature = "ipir")))]
 async fn test_end_to_end_is_spent() {
+    let scenario = scenario();
+    run_end_to_end_is_spent(Arc::new(YpirPirEngine::new(&scenario))).await;
+}
+
+#[tokio::test]
+#[cfg(feature = "ipir")]
+async fn test_ipir_end_to_end_is_spent() {
+    let scenario = scenario();
+    let engine = Arc::new(IpirPirEngine::new(&scenario).unwrap());
+    run_end_to_end_is_spent(engine).await;
+}
+
+fn scenario() -> YpirScenario {
+    YpirScenario {
+        num_items: NUM_BUCKETS as u64,
+        item_size_bits: (spend_types::BUCKET_BYTES * 8) as u64,
+    }
+}
+
+async fn run_end_to_end_is_spent<P>(engine: Arc<P>)
+where
+    P: PirEngine + 'static,
+{
     // Build test chain: 20 blocks, 5 nullifiers each
     let mock = MockState::new();
     let mut all_nfs: Vec<Vec<[u8; 32]>> = Vec::new();
@@ -284,12 +311,6 @@ async fn test_end_to_end_is_spent() {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
     };
 
-    // Sync server with real YPIR
-    let scenario = spend_types::YpirScenario {
-        num_items: NUM_BUCKETS as u64,
-        item_size_bits: (spend_types::BUCKET_BYTES * 8) as u64,
-    };
-    let engine = Arc::new(YpirPirEngine::new(&scenario));
     let (app_state, _hashtable) = run_sync_only(config, engine).await.unwrap();
 
     // Start HTTP server
