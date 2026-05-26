@@ -6,8 +6,8 @@
 #   spend-server-darwin-arm64,
 #   spend-server.service
 #
-# Note: darwin-amd64 is not supported because spend-server requires the ypir
-# feature (which builds C++ with -march=native) and cannot be cross-compiled.
+# Note: darwin-amd64 is not built by this workflow; release artifacts target
+# the platforms in the matrix below.
 
 name: Release
 
@@ -58,7 +58,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.platform }}-spend-server-
 
       - name: Build release binary
-        run: cargo build --release -p combined-server --features ypir
+        run: cargo build --release -p combined-server --features ipir
         env:
           RUSTFLAGS: ${{ contains(matrix.platform, 'amd64') && '-C target-feature=+avx512f' || '' }}
 
