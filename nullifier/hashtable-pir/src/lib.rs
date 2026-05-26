@@ -461,7 +461,8 @@ mod tests {
             first_output_position: 12345,
             action_count: 4,
         };
-        db.insert_block(500, make_hash(1), &[nwm.clone()]).unwrap();
+        db.insert_block(500, make_hash(1), std::slice::from_ref(&nwm))
+            .unwrap();
 
         let pir = db.to_pir_bytes();
         let bucket_idx = hash_to_bucket(&nwm.nullifier) as usize;

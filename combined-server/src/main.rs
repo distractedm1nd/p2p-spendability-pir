@@ -1,4 +1,5 @@
 use clap::Parser;
+#[cfg(any(feature = "ipir", feature = "ypir"))]
 use pir_types::YpirScenario;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -12,14 +13,16 @@ use spend_server::pir_stub::StubPirEngine as NfPirEngine;
 #[cfg(all(feature = "nullifier", not(feature = "ipir"), feature = "ypir"))]
 use spend_server::pir_ypir::YpirPirEngine as NfPirEngine;
 #[cfg(feature = "nullifier")]
-use spend_types::{BUCKET_BYTES, NUM_BUCKETS, TARGET_SIZE};
+use spend_types::TARGET_SIZE;
+#[cfg(all(feature = "nullifier", any(feature = "ipir", feature = "ypir")))]
+use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
 #[cfg(all(feature = "witness", feature = "ipir"))]
 use witness_server::pir_ipir::IpirPirEngine as WitPirEngine;
 #[cfg(all(feature = "witness", not(any(feature = "ipir", feature = "ypir"))))]
 use witness_server::pir_stub::StubPirEngine as WitPirEngine;
 #[cfg(all(feature = "witness", not(feature = "ipir"), feature = "ypir"))]
 use witness_server::pir_ypir::YpirPirEngine as WitPirEngine;
-#[cfg(feature = "witness")]
+#[cfg(all(feature = "witness", any(feature = "ipir", feature = "ypir")))]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
 #[derive(Parser)]
@@ -88,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "nullifier")]
     let nf_engine = {
+        #[cfg(any(feature = "ipir", feature = "ypir"))]
         let nf_scenario = YpirScenario {
             num_items: NUM_BUCKETS as u64,
             item_size_bits: (BUCKET_BYTES * 8) as u64,
@@ -103,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "witness")]
     let wit_engine = {
+        #[cfg(any(feature = "ipir", feature = "ypir"))]
         let wit_scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
