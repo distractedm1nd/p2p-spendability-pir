@@ -3530,6 +3530,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chain-ingest",
+ "clap",
  "commitment-ingest",
  "commitment-tree-db",
  "hex",
@@ -3539,6 +3540,7 @@ dependencies = [
  "orchard 0.13.1",
  "pir-types",
  "reqwest",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
