@@ -1,18 +1,11 @@
 use clap::Parser;
-use spend_server::server;
 use spend_server::state::ServerConfig;
+use spend_server::{pir_ypir::YpirPirEngine, server};
 use spend_types::{YpirScenario, BUCKET_BYTES, CONFIRMATION_DEPTH, NUM_BUCKETS, TARGET_SIZE};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
-
-#[cfg(feature = "ipir")]
-use spend_server::pir_ipir::IpirPirEngine as SelectedPirEngine;
-#[cfg(not(any(feature = "ipir", feature = "ypir")))]
-use spend_server::pir_stub::StubPirEngine as SelectedPirEngine;
-#[cfg(all(not(feature = "ipir"), feature = "ypir"))]
-use spend_server::pir_ypir::YpirPirEngine as SelectedPirEngine;
 
 #[derive(Parser)]
 #[command(name = "spend-server", about = "Private nullifier spendability server")]
@@ -71,12 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_items: NUM_BUCKETS as u64,
         item_size_bits: (BUCKET_BYTES * 8) as u64,
     };
-    #[cfg(feature = "ipir")]
-    let engine = Arc::new(SelectedPirEngine::new(&scenario)?);
-    #[cfg(all(not(feature = "ipir"), feature = "ypir"))]
-    let engine = Arc::new(SelectedPirEngine::new(&scenario));
-    #[cfg(not(any(feature = "ipir", feature = "ypir")))]
-    let engine = Arc::new(SelectedPirEngine);
+    let engine = Arc::new(YpirPirEngine::new(&scenario));
 
     server::run(config, engine).await?;
 

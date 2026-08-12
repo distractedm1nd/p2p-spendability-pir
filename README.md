@@ -44,15 +44,14 @@ spendability-pir/
 ### Build
 
 ```bash
-cargo build                                    # library crates (no YPIR)
-cargo build --features ypir -p spend-server    # nullifier server with YPIR
-cargo build --features ypir -p witness-server  # witness server with YPIR
+cargo build -p spend-server    # nullifier server with YPIR
+cargo build -p witness-server  # witness server with YPIR
 ```
 
 ### Run (nullifier server)
 
 ```bash
-cargo run -p spend-server --features ypir --release -- \
+cargo run -p spend-server --release -- \
     --lwd-url http://localhost:9067 \
     --data-dir ./data \
     --listen 0.0.0.0:8080
@@ -61,8 +60,8 @@ cargo run -p spend-server --features ypir --release -- \
 ### Test
 
 ```bash
-cargo test --workspace                                  # fast (~10s, no YPIR)
-cargo test --workspace --all-features --release         # full (~3min, with YPIR)
+cargo test --workspace
+cargo test --workspace --release
 ```
 
 ## Performance (release mode)

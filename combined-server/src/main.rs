@@ -1,37 +1,29 @@
 use clap::Parser;
-#[cfg(any(feature = "ipir", feature = "ypir"))]
+#[cfg(any(feature = "nullifier", feature = "witness"))]
 use pir_types::YpirScenario;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
-#[cfg(all(feature = "nullifier", feature = "ipir"))]
-use spend_server::pir_ipir::IpirPirEngine as NfPirEngine;
-#[cfg(all(feature = "nullifier", not(any(feature = "ipir", feature = "ypir"))))]
-use spend_server::pir_stub::StubPirEngine as NfPirEngine;
-#[cfg(all(feature = "nullifier", not(feature = "ipir"), feature = "ypir"))]
+#[cfg(feature = "nullifier")]
 use spend_server::pir_ypir::YpirPirEngine as NfPirEngine;
 #[cfg(feature = "nullifier")]
 use spend_types::TARGET_SIZE;
-#[cfg(all(feature = "nullifier", any(feature = "ipir", feature = "ypir")))]
+#[cfg(feature = "nullifier")]
 use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
-#[cfg(all(feature = "witness", feature = "ipir"))]
-use witness_server::pir_ipir::IpirPirEngine as WitPirEngine;
-#[cfg(all(feature = "witness", not(any(feature = "ipir", feature = "ypir"))))]
-use witness_server::pir_stub::StubPirEngine as WitPirEngine;
-#[cfg(all(feature = "witness", not(feature = "ipir"), feature = "ypir"))]
+#[cfg(feature = "witness")]
 use witness_server::pir_ypir::YpirPirEngine as WitPirEngine;
-#[cfg(all(feature = "witness", any(feature = "ipir", feature = "ypir")))]
+#[cfg(feature = "witness")]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use combined_server::server::{create_app_states, run_with_states_until};
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use spendability_pir_zakura::{P2pPirService, PIR_SERVICE_ID};
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use tokio_util::sync::CancellationToken;
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use zakura_network::zakura::{CustomService, ZakuraServiceId};
 
 #[derive(Parser)]
@@ -60,7 +52,7 @@ struct Cli {
 
     /// Zakura configuration file. If omitted, Zakura loads its conventional
     /// configuration sources and environment variables.
-    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    #[cfg(all(feature = "nullifier", feature = "witness"))]
     #[arg(long)]
     zakura_config: Option<PathBuf>,
 }
@@ -75,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    #[cfg(all(feature = "nullifier", feature = "witness"))]
     let zakura_config = {
         let config = zakurad::config::ZakuradConfig::load(cli.zakura_config.clone())?;
 
@@ -118,37 +110,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "nullifier")]
     let nf_engine = {
-        #[cfg(any(feature = "ipir", feature = "ypir"))]
         let nf_scenario = YpirScenario {
             num_items: NUM_BUCKETS as u64,
             item_size_bits: (BUCKET_BYTES * 8) as u64,
         };
-        #[cfg(feature = "ipir")]
-        let engine = NfPirEngine::new(&nf_scenario)?;
-        #[cfg(all(not(feature = "ipir"), feature = "ypir"))]
         let engine = NfPirEngine::new(&nf_scenario);
-        #[cfg(not(any(feature = "ipir", feature = "ypir")))]
-        let engine = NfPirEngine;
         Arc::new(engine)
     };
 
     #[cfg(feature = "witness")]
     let wit_engine = {
-        #[cfg(any(feature = "ipir", feature = "ypir"))]
         let wit_scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
         };
-        #[cfg(feature = "ipir")]
-        let engine = WitPirEngine::new(&wit_scenario)?;
-        #[cfg(all(not(feature = "ipir"), feature = "ypir"))]
         let engine = WitPirEngine::new(&wit_scenario);
-        #[cfg(not(any(feature = "ipir", feature = "ypir")))]
-        let engine = WitPirEngine;
         Arc::new(engine)
     };
 
-    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    #[cfg(all(feature = "nullifier", feature = "witness"))]
     {
         let (nf_state, wit_state) = create_app_states(&config, nf_engine, wit_engine);
         let p2p_service = Arc::new(P2pPirService::new(wit_state.clone(), nf_state.clone()));
@@ -162,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
 
-    #[cfg(not(all(feature = "nullifier", feature = "witness", feature = "ypir")))]
+    #[cfg(not(all(feature = "nullifier", feature = "witness")))]
     combined_server::server::run(
         config,
         #[cfg(feature = "nullifier")]
@@ -175,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 async fn run_combined_with_zakura(
     config: combined_server::server::CombinedConfig,
     nf_state: Arc<spend_server::state::AppState<NfPirEngine>>,
@@ -227,7 +207,7 @@ async fn run_combined_with_zakura(
     Ok(())
 }
 
-#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 fn map_zakura_result<E>(result: Result<(), E>) -> Result<(), Box<dyn std::error::Error>>
 where
     E: std::fmt::Display,

@@ -7,11 +7,6 @@ edition = "2021"
 name = "witness-server"
 path = "src/main.rs"
 
-[features]
-default = ["ypir"]
-ypir = ["dep:ypir", "dep:spiral-rs"]
-ipir = ["dep:ipir-sp", "dep:inspiring"]
-
 [dependencies]
 witness-types = { path = "../witness-types" }
 commitment-tree-db = { path = "../commitment-tree-db" }
@@ -28,10 +23,8 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
-ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server"], optional = true }
-spiral-rs = { package = "valar-spiral-rs", version = "0.5", optional = true }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
+ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server"] }
+spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
 
 [dev-dependencies]
 witness-client = { path = "../witness-client" }

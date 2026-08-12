@@ -1,5 +1,3 @@
-#![cfg(feature = "ypir")]
-
 //! Zakura request/response transport for the spendability PIR server.
 
 use std::{

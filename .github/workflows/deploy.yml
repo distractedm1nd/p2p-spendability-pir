@@ -45,7 +45,7 @@ jobs:
             ${{ runner.os }}-spend-server-rust-1.89.0-
 
       - name: Build release binary
-        run: cargo build --release -p combined-server --features ipir
+        run: cargo build --release -p combined-server
 
       - name: Upload binary and config
         uses: actions/upload-artifact@v4

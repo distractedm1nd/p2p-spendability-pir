@@ -179,7 +179,6 @@ jobs:
           cargo test
           -p witness-server
           --test pir_round_trip
-          --features ypir
           --release
           -- --nocapture
 

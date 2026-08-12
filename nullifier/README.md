@@ -189,10 +189,6 @@ Orphaned nullifiers are removed instantly — the table never serves stale data 
 | `spend-server` | Axum HTTP server. Sync/follow lifecycle, per-block PIR rebuilds via `ArcSwap`, async snapshot I/O. `PirEngine` trait allows swapping between stub (tests) and real YPIR (production). Exposes `build_router()` for embedding in a combined server. |
 | `spend-client` | `SpendClient` (async) and `SpendClientBlocking` (sync FFI wrapper). `is_spent(nf)` returns `Option<SpendMetadata>` and `check_nullifiers` returns `Vec<Option<SpendMetadata>>` — `Some(meta)` for spent nullifiers (with spend height, output position, action count), `None` otherwise. Handles YPIR SimplePIR query generation, response decoding, and bucket scanning. |
 
-### Feature flags
-
-- **`ypir`** (spend-server): Enables the real YPIR engine (`pir_ypir.rs`). Without this flag, only the stub engine (`pir_stub.rs`) is available — used for tests that don't need cryptographic PIR.
-
 ## Wallet integration
 
 Wallet-side PIR integration spans three repositories (`zcash_client_sqlite`, `zcash-swift-wallet-sdk`, `zodl-ios`) controlled by the `spendability-pir` Cargo feature.

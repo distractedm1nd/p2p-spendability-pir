@@ -22,16 +22,6 @@ witness = [
     "dep:commitment-ingest",
     "dep:commitment-tree-db",
 ]
-ypir = [
-    "spend-server?/ypir",
-    "witness-server?/ypir",
-    "dep:spendability-pir-zakura",
-    "dep:zakura",
-    "dep:zakura-network",
-    "dep:rayon",
-]
-ipir = ["spend-server?/ipir", "witness-server?/ipir"]
-
 [dependencies]
 spend-server = { path = "../nullifier/spend-server", optional = true }
 witness-server = { path = "../witness/witness-server", optional = true }
@@ -42,15 +32,14 @@ nf-ingest = { path = "../nullifier/nf-ingest", optional = true }
 commitment-ingest = { path = "../witness/commitment-ingest", optional = true }
 hashtable-pir = { path = "../nullifier/hashtable-pir", optional = true }
 commitment-tree-db = { path = "../witness/commitment-tree-db", optional = true }
-spendability-pir-zakura = { path = "../zakura-server", features = ["ypir"], optional = true }
-# The full-node host is only built with the ypir feature.
-zakura = { path = "../../zakura/crates/zakurad", default-features = false, optional = true }
-zakura-network = { path = "../../zakura/crates/zakura-network", optional = true }
+spendability-pir-zakura = { path = "../zakura-server" }
+zakura = { path = "../../zakura/crates/zakurad", default-features = false }
+zakura-network = { path = "../../zakura/crates/zakura-network" }
 chain-ingest = { path = "../shared/chain-ingest" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-rayon = { version = "1.10", optional = true }
+rayon = "1.10"
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"

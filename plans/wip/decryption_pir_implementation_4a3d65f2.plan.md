@@ -186,7 +186,7 @@ In `[combined-server/src/server.rs](spendability-pir/combined-server/src/server.
 Add `test-decryption` job to `[.github/workflows/ci.yml](spendability-pir/.github/workflows/ci.yml)` covering:
 
 - `decryption-types`, `decryption-db`, `decryption-server` unit tests
-- PIR round-trip test (feature-gated on `ypir`)
+- PIR round-trip test
 
 ---
 
@@ -292,4 +292,3 @@ Update the existing PIR integration test to exercise the full flow:
 - CI: ensure all new crates are covered in test jobs
 - Remove v1 block-download code path (or gate behind a feature flag for fallback)
 - Final review pass for code quality, error handling, and documentation
-

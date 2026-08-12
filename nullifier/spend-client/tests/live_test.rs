@@ -1,7 +1,7 @@
 //! Live integration test against a running spend-server + real lightwalletd.
 //!
 //! Prerequisites:
-//!   1. Start the server: cargo run -p spend-server --features ypir --release -- \
+//!   1. Start the server: cargo run -p spend-server --release -- \
 //!      --lwd-url https://us.zec.stardust.rest:443 --data-dir ./data
 //!   2. Run this test: cargo test -p spend-client --features live --test live_test -- \
 //!      --nocapture --ignored

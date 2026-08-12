@@ -23,34 +23,34 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build spend-server with both nullifier + witness (default)
-	cargo build --release -p combined-server --features ypir
+	cargo build --release -p combined-server
 
 build-nullifier: ## Build spend-server with nullifier only
-	cargo build --release -p combined-server --no-default-features --features "nullifier,ypir"
+	cargo build --release -p combined-server --no-default-features --features nullifier
 
 build-witness: ## Build spend-server with witness only
-	cargo build --release -p combined-server --no-default-features --features "witness,ypir"
+	cargo build --release -p combined-server --no-default-features --features witness
 
 run: ## Run combined HTTP + Zakura P2P server with both subsystems
-	cargo run --release -p combined-server --features ypir -- \
+	cargo run --release -p combined-server -- \
 		--lwd-url $(LWD_URL) \
 		--data-dir $(DATA_DIR) \
 		--listen $(LISTEN) \
 		--zakura-config $(ZAKURA_CONFIG)
 
 run-nullifier: ## Run spend-server with nullifier only
-	cargo run --release -p combined-server --no-default-features --features "nullifier,ypir" -- \
+	cargo run --release -p combined-server --no-default-features --features nullifier -- \
 		--lwd-url $(LWD_URL) \
 		--data-dir $(DATA_DIR) \
 		--listen $(LISTEN)
 
 run-witness: ## Run spend-server with witness only
-	cargo run --release -p combined-server --no-default-features --features "witness,ypir" -- \
+	cargo run --release -p combined-server --no-default-features --features witness -- \
 		--lwd-url $(LWD_URL) \
 		--data-dir $(DATA_DIR) \
 		--listen $(LISTEN)
 
-test: ## Run workspace tests (no YPIR)
+test: ## Run workspace tests
 	cargo test --workspace
 
 test-ypir: ## Run all tests including YPIR round-trips (release mode)
