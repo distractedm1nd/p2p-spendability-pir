@@ -15,10 +15,8 @@ members = [
     "witness/decryption-types",
     "witness/witness-client",
     "combined-server",
+    "zakura-server",
 ]
-
-[patch.crates-io]
-valar-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
 
 [profile.release]
 lto = "fat"

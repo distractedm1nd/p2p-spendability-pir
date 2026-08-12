@@ -10,6 +10,7 @@
 DATA_DIR  ?= ./data
 LISTEN    ?= 0.0.0.0:8080
 LWD_URL   := https://us.zec.stardust.rest:443
+ZAKURA_CONFIG ?= ./zakura.toml
 
 # ── Targets ──────────────────────────────────────────────────────────
 
@@ -30,11 +31,12 @@ build-nullifier: ## Build spend-server with nullifier only
 build-witness: ## Build spend-server with witness only
 	cargo build --release -p combined-server --no-default-features --features "witness,ypir"
 
-run: ## Run spend-server with both nullifier + witness (default)
+run: ## Run combined HTTP + Zakura P2P server with both subsystems
 	cargo run --release -p combined-server --features ypir -- \
 		--lwd-url $(LWD_URL) \
 		--data-dir $(DATA_DIR) \
-		--listen $(LISTEN)
+		--listen $(LISTEN) \
+		--zakura-config $(ZAKURA_CONFIG)
 
 run-nullifier: ## Run spend-server with nullifier only
 	cargo run --release -p combined-server --no-default-features --features "nullifier,ypir" -- \

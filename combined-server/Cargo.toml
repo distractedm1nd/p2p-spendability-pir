@@ -2,6 +2,7 @@
 name = "combined-server"
 version = "0.1.0"
 edition = "2021"
+default-run = "spend-server"
 
 [[bin]]
 name = "spend-server"
@@ -21,7 +22,14 @@ witness = [
     "dep:commitment-ingest",
     "dep:commitment-tree-db",
 ]
-ypir = ["spend-server?/ypir", "witness-server?/ypir"]
+ypir = [
+    "spend-server?/ypir",
+    "witness-server?/ypir",
+    "dep:spendability-pir-zakura",
+    "dep:zakura",
+    "dep:zakura-network",
+    "dep:rayon",
+]
 ipir = ["spend-server?/ipir", "witness-server?/ipir"]
 
 [dependencies]
@@ -34,9 +42,15 @@ nf-ingest = { path = "../nullifier/nf-ingest", optional = true }
 commitment-ingest = { path = "../witness/commitment-ingest", optional = true }
 hashtable-pir = { path = "../nullifier/hashtable-pir", optional = true }
 commitment-tree-db = { path = "../witness/commitment-tree-db", optional = true }
+spendability-pir-zakura = { path = "../zakura-server", features = ["ypir"], optional = true }
+# The full-node host is only built with the ypir feature.
+zakura = { path = "../../zakura/crates/zakurad", default-features = false, optional = true }
+zakura-network = { path = "../../zakura/crates/zakura-network", optional = true }
 chain-ingest = { path = "../shared/chain-ingest" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+rayon = { version = "1.10", optional = true }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -46,5 +60,5 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false }
-spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
+ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false }
+spiral-rs = { package = "valar-spiral-rs", version = "0.5" }

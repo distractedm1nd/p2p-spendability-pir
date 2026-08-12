@@ -25,6 +25,15 @@ use witness_server::pir_ypir::YpirPirEngine as WitPirEngine;
 #[cfg(all(feature = "witness", any(feature = "ipir", feature = "ypir")))]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+use combined_server::server::{create_app_states, run_with_states_until};
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+use spendability_pir_zakura::{P2pPirService, PIR_SERVICE_ID};
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+use tokio_util::sync::CancellationToken;
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+use zakura_network::zakura::{CustomService, ZakuraServiceId};
+
 #[derive(Parser)]
 #[command(name = "spend-server", about = "Zcash PIR server")]
 struct Cli {
@@ -48,6 +57,12 @@ struct Cli {
     /// Blocks between snapshots
     #[arg(long, default_value_t = 100)]
     snapshot_interval: u64,
+
+    /// Zakura configuration file. If omitted, Zakura loads its conventional
+    /// configuration sources and environment variables.
+    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    #[arg(long)]
+    zakura_config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -59,6 +74,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
+
+    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    let zakura_config = {
+        let config = zakurad::config::ZakuradConfig::load(cli.zakura_config.clone())?;
+
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(config.sync.parallel_cpu_threads)
+            .thread_name(|index| format!("rayon {index}"))
+            .build_global()?;
+
+        config
+    };
 
     #[cfg(feature = "nullifier")]
     std::fs::create_dir_all(cli.data_dir.join("nullifier"))?;
@@ -121,6 +148,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(engine)
     };
 
+    #[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+    {
+        let (nf_state, wit_state) = create_app_states(&config, nf_engine, wit_engine);
+        let p2p_service = Arc::new(P2pPirService::new(wit_state.clone(), nf_state.clone()));
+        let service_id = ZakuraServiceId::new(PIR_SERVICE_ID)?;
+        let custom_service = CustomService {
+            service: p2p_service,
+            advertised_services: vec![service_id],
+        };
+
+        run_combined_with_zakura(config, nf_state, wit_state, zakura_config, custom_service)
+            .await?;
+    }
+
+    #[cfg(not(all(feature = "nullifier", feature = "witness", feature = "ypir")))]
     combined_server::server::run(
         config,
         #[cfg(feature = "nullifier")]
@@ -131,4 +173,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     Ok(())
+}
+
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+async fn run_combined_with_zakura(
+    config: combined_server::server::CombinedConfig,
+    nf_state: Arc<spend_server::state::AppState<NfPirEngine>>,
+    wit_state: Arc<witness_server::state::AppState<WitPirEngine>>,
+    zakura_config: zakurad::config::ZakuradConfig,
+    custom_service: CustomService,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let shutdown = CancellationToken::new();
+    let combined = run_with_states_until(config, nf_state, wit_state, shutdown.clone());
+    let zakura =
+        zakurad::node::run_with_services(zakura_config, vec![custom_service], shutdown.clone());
+
+    tokio::pin!(combined);
+    tokio::pin!(zakura);
+
+    enum FirstExit<C, Z> {
+        Signal(std::io::Result<()>),
+        Combined(C),
+        Zakura(Z),
+    }
+
+    let first_exit = tokio::select! {
+        signal = tokio::signal::ctrl_c() => FirstExit::Signal(signal),
+        result = &mut combined => FirstExit::Combined(result),
+        result = &mut zakura => FirstExit::Zakura(result),
+    };
+
+    shutdown.cancel();
+
+    match first_exit {
+        FirstExit::Signal(signal) => {
+            let (combined_result, zakura_result) = tokio::join!(combined, zakura);
+            signal?;
+            combined_result?;
+            map_zakura_result(zakura_result)?;
+        }
+        FirstExit::Combined(combined_result) => {
+            let zakura_result = zakura.await;
+            combined_result?;
+            map_zakura_result(zakura_result)?;
+        }
+        FirstExit::Zakura(zakura_result) => {
+            let combined_result = combined.await;
+            map_zakura_result(zakura_result)?;
+            combined_result?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+fn map_zakura_result<E>(result: Result<(), E>) -> Result<(), Box<dyn std::error::Error>>
+where
+    E: std::fmt::Display,
+{
+    result.map_err(|error| std::io::Error::other(format!("Zakura node failed: {error}")).into())
 }
