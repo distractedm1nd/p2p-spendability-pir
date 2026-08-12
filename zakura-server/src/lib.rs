@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use pir_types::PirEngine;
+use pir_types::{PirEngine, ServerPhase};
 use spend_server::state::AppState as SpendState;
 use witness_server::state::AppState as WitnessState;
 use zakura_network::zakura::{
@@ -48,6 +48,41 @@ impl From<serde_json::Error> for P2PError {
 impl From<P2PError> for SinkReject {
     fn from(value: P2PError) -> Self {
         SinkReject::protocol(value)
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CombinedHealthResponse {
+    pub nullifier: SubsystemHealth,
+    pub witness: SubsystemHealth,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SubsystemHealth {
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_height: Option<u64>,
+}
+
+impl From<&ServerPhase> for SubsystemHealth {
+    fn from(phase: &ServerPhase) -> Self {
+        match phase {
+            ServerPhase::Serving => Self {
+                phase: "serving".into(),
+                current_height: None,
+                target_height: None,
+            },
+            ServerPhase::Syncing {
+                current_height,
+                target_height,
+            } => Self {
+                phase: "syncing".into(),
+                current_height: Some(*current_height),
+                target_height: Some(*target_height),
+            },
+        }
     }
 }
 
@@ -150,19 +185,42 @@ impl P2pPirService {
     }
 
     async fn health(&self) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+        Self::to_json_frame(
+            &CombinedHealthResponse {
+                nullifier: SubsystemHealth::from(self.spend_state.phase.load().as_ref()),
+                witness: SubsystemHealth::from(self.witness_state.phase.load().as_ref()),
+            },
+            Message::HealthRes,
+        )
     }
 
     async fn nullifier_metadata(&self) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+        let pir = self.spend_state.live_pir.load();
+        let metadata = match pir.as_ref() {
+            Some(pir_state) => &pir_state.metadata,
+            None => return Err(P2PError::ServiceUnavailable),
+        };
+
+        Self::to_json_frame(metadata, Message::NullifierMetadataRes)
     }
 
     async fn nullifier_params(&self) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+        Self::to_json_frame(&self.spend_state.scenario, Message::NullifierParamsRes)
     }
 
-    async fn nullifier_query(&self, _payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+    async fn nullifier_query(&self, payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
+        let pir = self.spend_state.live_pir.load();
+        let pir_state = match pir.as_ref() {
+            Some(pir_state) => pir_state,
+            None => return Err(P2PError::ServiceUnavailable),
+        };
+        let payload = self
+            .spend_state
+            .engine
+            .answer_query(&pir_state.engine_state, &payload)
+            .map_err(|error| P2PError::QueryError(error.to_string()))?;
+
+        Ok(Self::frame(payload, Message::NullifierQueryRes))
     }
 
     async fn witness_metadata(&self) -> Result<Vec<Frame>, P2PError> {
@@ -172,19 +230,23 @@ impl P2pPirService {
             None => Err(P2PError::ServiceUnavailable),
         }?;
 
-        P2pPirService::to_frame(meta, Message::WitnessMetadataRes)
+        P2pPirService::to_json_frame(meta, Message::WitnessMetadataRes)
     }
 
-    pub fn to_frame<T>(value: &T, msg_type: Message) -> Result<Vec<Frame>, P2PError>
+    pub fn to_json_frame<T>(value: &T, msg_type: Message) -> Result<Vec<Frame>, P2PError>
     where
         T: ?Sized + serde::Serialize,
     {
         let payload = serde_json::to_vec(value).map_err(|e| P2PError::SerdeError(e.to_string()))?;
-        Ok(vec![Frame {
+        Ok(Self::frame(payload, msg_type))
+    }
+
+    fn frame(payload: Vec<u8>, msg_type: Message) -> Vec<Frame> {
+        vec![Frame {
             message_type: msg_type as u16,
             flags: 0,
             payload,
-        }])
+        }]
     }
 
     async fn witness_broadcast(&self) -> Result<Vec<Frame>, P2PError> {
@@ -194,11 +256,11 @@ impl P2pPirService {
             None => return Err(P2PError::ServiceUnavailable),
         };
 
-        Self::to_frame(broadcast, Message::WitnessBroadcastRes)
+        Self::to_json_frame(broadcast, Message::WitnessBroadcastRes)
     }
 
     async fn witness_params(&self) -> Result<Vec<Frame>, P2PError> {
-        Self::to_frame(&self.witness_state.scenario, Message::WitnessParamsRes)
+        Self::to_json_frame(&self.witness_state.scenario, Message::WitnessParamsRes)
     }
 
     async fn witness_query(&self, payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
@@ -213,11 +275,7 @@ impl P2pPirService {
             .answer_query(&pir_state.engine_state, &payload)
             .map_err(|error| P2PError::QueryError(error.to_string()))?;
 
-        Ok(vec![Frame {
-            message_type: Message::WitnessQueryRes.into(),
-            flags: 0,
-            payload,
-        }])
+        Ok(Self::frame(payload, Message::WitnessQueryRes))
     }
 
     async fn forward(&self, frame: Frame) -> Result<Vec<Frame>, SinkReject> {
@@ -231,6 +289,21 @@ impl P2pPirService {
         let message_type = frame.message_type;
         let payload = frame.payload;
         let message = Message::try_from(message_type).map_err(SinkReject::protocol)?;
+        if !payload.is_empty()
+            && matches!(
+                message,
+                Message::HealthReq
+                    | Message::NullifierMetadataReq
+                    | Message::NullifierParamsReq
+                    | Message::WitnessMetadataReq
+                    | Message::WitnessBroadcastReq
+                    | Message::WitnessParamsReq
+            )
+        {
+            return Err(SinkReject::protocol(format!(
+                "request type {message_type} requires an empty payload"
+            )));
+        }
 
         let result = match message {
             Message::HealthReq => self.health().await,
@@ -348,7 +421,7 @@ mod tests {
     use std::{net::SocketAddr, path::PathBuf};
 
     #[tokio::test]
-    async fn witness_params_are_available_before_pir_setup() {
+    async fn health_and_params_are_available_before_pir_setup() {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let witness_scenario = pir_types::YpirScenario {
             num_items: 8_192,
@@ -379,9 +452,33 @@ mod tests {
             },
             Arc::new(SpendPirEngine::new(&spend_scenario)),
         ));
+        witness_state.phase.store(Arc::new(ServerPhase::Serving));
         let service = P2pPirService::new(witness_state, spend_state);
 
-        let frames = service
+        let health = service
+            .forward(Frame {
+                message_type: Message::HealthReq.into(),
+                flags: 0,
+                payload: vec![],
+            })
+            .await
+            .unwrap();
+        let health: CombinedHealthResponse = serde_json::from_slice(&health[0].payload).unwrap();
+        assert_eq!(health.nullifier.phase, "syncing");
+        assert_eq!(health.nullifier.current_height, Some(0));
+        assert_eq!(health.witness.phase, "serving");
+        assert!(matches!(
+            service
+                .forward(Frame {
+                    message_type: Message::HealthReq.into(),
+                    flags: 0,
+                    payload: vec![1],
+                })
+                .await,
+            Err(SinkReject::Protocol(_))
+        ));
+
+        let witness_params = service
             .forward(Frame {
                 message_type: Message::WitnessParamsReq.into(),
                 flags: 0,
@@ -390,9 +487,30 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(frames[0].message_type, u16::from(Message::WitnessParamsRes));
-        let scenario: pir_types::YpirScenario = serde_json::from_slice(&frames[0].payload).unwrap();
+        assert_eq!(
+            witness_params[0].message_type,
+            u16::from(Message::WitnessParamsRes)
+        );
+        let scenario: pir_types::YpirScenario =
+            serde_json::from_slice(&witness_params[0].payload).unwrap();
         assert_eq!(scenario.num_items, witness_scenario.num_items);
         assert_eq!(scenario.item_size_bits, witness_scenario.item_size_bits);
+
+        let nullifier_params = service
+            .forward(Frame {
+                message_type: Message::NullifierParamsReq.into(),
+                flags: 0,
+                payload: vec![],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            nullifier_params[0].message_type,
+            u16::from(Message::NullifierParamsRes)
+        );
+        let scenario: pir_types::YpirScenario =
+            serde_json::from_slice(&nullifier_params[0].payload).unwrap();
+        assert_eq!(scenario.num_items, spend_scenario.num_items);
+        assert_eq!(scenario.item_size_bits, spend_scenario.item_size_bits);
     }
 }
