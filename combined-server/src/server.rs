@@ -260,19 +260,31 @@ async fn run_inner<
     #[cfg(all(feature = "nullifier", feature = "witness"))]
     let ((nf_state, mut hashtable), (wit_state, mut tree)) =
         if let Some((nf_state, wit_state)) = provided_states {
-            let (nf_result, wit_result) = tokio::join!(
-                spend_server::server::sync_into(nf_state.clone()),
-                witness_server::server::sync_into(wit_state.clone()),
-            );
+            let sync = async {
+                tokio::join!(
+                    spend_server::server::sync_into(nf_state.clone()),
+                    witness_server::server::sync_into(wit_state.clone()),
+                )
+            };
+            let (nf_result, wit_result) = tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                results = sync => results,
+            };
             (
                 (nf_state, nf_result.map_err(ServerError::Nullifier)?),
                 (wit_state, wit_result.map_err(ServerError::Witness)?),
             )
         } else {
-            let (nf_result, wit_result) = tokio::join!(
-                spend_server::server::run_sync_only(nf_config, nf_engine.clone()),
-                witness_server::server::run_sync_only(wit_config, wit_engine.clone()),
-            );
+            let sync = async {
+                tokio::join!(
+                    spend_server::server::run_sync_only(nf_config, nf_engine.clone()),
+                    witness_server::server::run_sync_only(wit_config, wit_engine.clone()),
+                )
+            };
+            let (nf_result, wit_result) = tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                results = sync => results,
+            };
             (
                 nf_result.map_err(ServerError::Nullifier)?,
                 wit_result.map_err(ServerError::Witness)?,
@@ -280,16 +292,20 @@ async fn run_inner<
         };
 
     #[cfg(all(feature = "nullifier", not(feature = "witness")))]
-    let (nf_state, mut hashtable) =
-        spend_server::server::run_sync_only(nf_config, nf_engine.clone())
-            .await
-            .map_err(ServerError::Nullifier)?;
+    let (nf_state, mut hashtable) = tokio::select! {
+        _ = shutdown.cancelled() => return Ok(()),
+        result = spend_server::server::run_sync_only(nf_config, nf_engine.clone()) => {
+            result.map_err(ServerError::Nullifier)?
+        }
+    };
 
     #[cfg(all(feature = "witness", not(feature = "nullifier")))]
-    let (wit_state, mut tree) =
-        witness_server::server::run_sync_only(wit_config, wit_engine.clone())
-            .await
-            .map_err(ServerError::Witness)?;
+    let (wit_state, mut tree) = tokio::select! {
+        _ = shutdown.cancelled() => return Ok(()),
+        result = witness_server::server::run_sync_only(wit_config, wit_engine.clone()) => {
+            result.map_err(ServerError::Witness)?
+        }
+    };
 
     tracing::info!("sync complete, building router");
 
