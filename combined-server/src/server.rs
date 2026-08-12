@@ -374,6 +374,15 @@ async fn run_inner<
                 };
                 catch_up_witness(&config.lwd_urls, wit_latest + 1, nf_latest, &mut tree, ts)
                     .await?;
+                let anchor_height = tree.latest_height().unwrap_or(0);
+                let wit_pir = witness_server::server::rebuild_pir(
+                    &*wit_engine,
+                    &mut tree,
+                    &wit_state.scenario,
+                    anchor_height,
+                )
+                .map_err(ServerError::Witness)?;
+                wit_state.live_pir.store(Arc::new(Some(wit_pir)));
             }
             std::cmp::Ordering::Equal => {}
         }
@@ -414,6 +423,10 @@ async fn run_inner<
         ChainTracker::with_tip(follow_height, follow_hash, CONFIRMATION_DEPTH as usize * 2);
     let mut current_height = follow_height;
     let mut blocks_since_snapshot: u64 = 0;
+    #[cfg(feature = "witness")]
+    let mut witness_blocks_since_pir_rebuild: u64 = 0;
+    #[cfg(feature = "witness")]
+    let mut force_witness_pir_rebuild = false;
     #[cfg(feature = "nullifier")]
     let mut nf_prev_tree_size: Option<u32> = None;
 
@@ -461,6 +474,10 @@ async fn run_inner<
                     #[cfg(feature = "witness")]
                     {
                         tree.append_commitments(height, hash, &commitments);
+                        if let Some(update) = tree.frontier_update(height) {
+                            wit_state.push_frontier(update);
+                        }
+                        witness_blocks_since_pir_rebuild += 1;
                     }
 
                     current_height = height;
@@ -506,7 +523,13 @@ async fn run_inner<
                     #[cfg(feature = "witness")]
                     {
                         tree.rollback_to(rollback_to);
+                        wit_state.rollback_frontiers(rollback_to);
                         tree.append_commitments(height, hash, &commitments);
+                        if let Some(update) = tree.frontier_update(height) {
+                            wit_state.push_frontier(update);
+                        }
+                        witness_blocks_since_pir_rebuild += 1;
+                        force_witness_pir_rebuild = true;
                     }
 
                     current_height = height;
@@ -534,15 +557,21 @@ async fn run_inner<
 
         #[cfg(feature = "witness")]
         {
-            let anchor_height = tree.latest_height().unwrap_or(0);
-            let wit_pir = witness_server::server::rebuild_pir(
-                &*wit_engine,
-                &mut tree,
-                &wit_scenario,
-                anchor_height,
-            )
-            .map_err(ServerError::Witness)?;
-            wit_state.live_pir.store(Arc::new(Some(wit_pir)));
+            if force_witness_pir_rebuild
+                || witness_blocks_since_pir_rebuild >= witness_server::server::PIR_REBUILD_INTERVAL
+            {
+                let anchor_height = tree.latest_height().unwrap_or(0);
+                let wit_pir = witness_server::server::rebuild_pir(
+                    &*wit_engine,
+                    &mut tree,
+                    &wit_scenario,
+                    anchor_height,
+                )
+                .map_err(ServerError::Witness)?;
+                wit_state.live_pir.store(Arc::new(Some(wit_pir)));
+                witness_blocks_since_pir_rebuild = 0;
+                force_witness_pir_rebuild = false;
+            }
         }
 
         // Periodic snapshots

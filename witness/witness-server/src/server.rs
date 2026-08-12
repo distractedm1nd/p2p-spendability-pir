@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use witness_types::{WitnessChainEvent, L0_MAX_SHARDS, SHARD_LEAVES};
 
 const ORCHARD_PROTOCOL: i32 = 1;
+// ponytail: fixed cadence; make configurable only when deployments need tuning.
+pub const PIR_REBUILD_INTERVAL: u64 = 10;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
@@ -56,6 +58,7 @@ pub fn build_router<P: PirEngine + 'static>(state: Arc<AppState<P>>) -> Router {
         .route("/health", get(routes::health::<P>))
         .route("/metadata", get(routes::metadata::<P>))
         .route("/broadcast", get(routes::broadcast::<P>))
+        .route("/frontier", get(routes::frontier::<P>))
         .route("/params", get(routes::params::<P>))
         .route("/query", post(routes::query::<P>))
         .with_state(state)
@@ -457,9 +460,10 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
     };
 
     let mut blocks_since_snapshot: u64 = 0;
+    let mut blocks_since_pir_rebuild: u64 = 0;
 
     while let Some(event) = rx.recv().await {
-        match event {
+        let rebuild = match event {
             WitnessChainEvent::NewBlock {
                 height,
                 hash,
@@ -469,23 +473,33 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
             } => {
                 validate_prior_tree_size(&tree, height, prior_tree_size, "follow mode")?;
                 tree.append_commitments(height, hash, &commitments);
+                if let Some(update) = tree.frontier_update(height) {
+                    app_state.push_frontier(update);
+                }
                 blocks_since_snapshot += 1;
+                blocks_since_pir_rebuild += 1;
                 tracing::info!(
                     height,
                     cmx = commitments.len(),
                     tree_size = tree.tree_size(),
                     "new block"
                 );
+                blocks_since_pir_rebuild >= PIR_REBUILD_INTERVAL
             }
             WitnessChainEvent::Reorg { rollback_to } => {
                 tree.rollback_to(rollback_to);
+                app_state.rollback_frontiers(rollback_to);
                 tracing::info!(rollback_to, tree_size = tree.tree_size(), "reorg handled");
+                true
             }
-        }
+        };
 
-        let anchor_height = tree.latest_height().unwrap_or(0);
-        let pir_state = rebuild_pir(&*engine, &mut tree, &app_state.scenario, anchor_height)?;
-        app_state.live_pir.store(Arc::new(Some(pir_state)));
+        if rebuild {
+            let anchor_height = tree.latest_height().unwrap_or(0);
+            let pir_state = rebuild_pir(&*engine, &mut tree, &app_state.scenario, anchor_height)?;
+            app_state.live_pir.store(Arc::new(Some(pir_state)));
+            blocks_since_pir_rebuild = 0;
+        }
 
         if blocks_since_snapshot >= config.snapshot_interval {
             snapshot_io::save_snapshot(&tree, &config.data_dir).await?;

@@ -124,6 +124,19 @@ pub struct BroadcastData {
     pub anchor_height: u64,
 }
 
+/// Public data needed to advance an existing witness to a newer block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrontierUpdate {
+    /// Block height represented by this update.
+    pub height: u64,
+    /// Orchard commitment tree size after this block.
+    pub tree_size: u64,
+    /// Orchard commitment tree root after this block.
+    pub root: Hash,
+    /// Hash of the rightmost populated node at each level, leaf-to-root.
+    pub rightmost_nodes: [Hash; TREE_DEPTH],
+}
+
 /// Chain event specific to the witness ingest pipeline.
 #[derive(Debug, Clone)]
 pub enum WitnessChainEvent {
@@ -251,6 +264,19 @@ mod tests {
         assert_eq!(decoded.anchor_height, 2_500_000);
         assert_eq!(decoded.subshard_roots.len(), 1);
         assert_eq!(decoded.subshard_roots[0].roots.len(), SUBSHARDS_PER_SHARD);
+    }
+
+    #[test]
+    fn frontier_update_serde_roundtrip() {
+        let update = FrontierUpdate {
+            height: 2_500_001,
+            tree_size: 123_456,
+            root: [0xAA; 32],
+            rightmost_nodes: [[0xBB; 32]; TREE_DEPTH],
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        let decoded: FrontierUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, update);
     }
 
     #[test]

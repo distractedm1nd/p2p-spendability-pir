@@ -20,6 +20,7 @@
 //! - [`CommitmentTreeDb::subshard_leaves`] — 256 leaf commitments for a given sub-shard
 //! - [`CommitmentTreeDb::build_pir_db`] — row-major bytes for YPIR setup
 //! - [`CommitmentTreeDb::broadcast_data`] — full broadcast payload
+//! - [`CommitmentTreeDb::frontier_update`] — compact data for advancing witnesses
 //! - Snapshot/restore via [`CommitmentTreeDb::to_snapshot`] / [`from_snapshot`]
 
 pub mod snapshot;
@@ -73,6 +74,8 @@ pub struct CommitmentTreeDb {
     /// window. `ss_root_cache[i]` = `Some(root)` if clean, `None` if dirty.
     /// Length is always [`L0_DB_ROWS`] (8,192).
     ss_root_cache: Vec<Option<Hash>>,
+    /// Cached roots for local shards. Invalidated alongside `ss_root_cache`.
+    shard_root_cache: Vec<Option<Hash>>,
 }
 
 impl CommitmentTreeDb {
@@ -84,6 +87,7 @@ impl CommitmentTreeDb {
             leaf_offset: 0,
             prefetched_shard_roots: Vec::new(),
             ss_root_cache: vec![None; L0_DB_ROWS],
+            shard_root_cache: vec![None; L0_MAX_SHARDS],
         }
     }
 
@@ -105,6 +109,7 @@ impl CommitmentTreeDb {
             leaf_offset,
             prefetched_shard_roots,
             ss_root_cache: vec![None; L0_DB_ROWS],
+            shard_root_cache: vec![None; L0_MAX_SHARDS],
         }
     }
 
@@ -198,6 +203,13 @@ impl CommitmentTreeDb {
             for slot in first_dirty..=last_dirty.min(L0_DB_ROWS - 1) {
                 self.ss_root_cache[slot] = None;
             }
+            for slot in
+                old_local_len / SHARD_LEAVES..=last_dirty.min(L0_DB_ROWS - 1) / SUBSHARDS_PER_SHARD
+            {
+                if let Some(root) = self.shard_root_cache.get_mut(slot) {
+                    *root = None;
+                }
+            }
         }
         self.blocks.push(BlockRecord {
             height,
@@ -227,6 +239,10 @@ impl CommitmentTreeDb {
         };
         for slot in frontier_slot..L0_DB_ROWS {
             self.ss_root_cache[slot] = None;
+        }
+        let frontier_shard = frontier_slot / SUBSHARDS_PER_SHARD;
+        for root in &mut self.shard_root_cache[frontier_shard.min(L0_MAX_SHARDS)..] {
+            *root = None;
         }
     }
 
@@ -316,6 +332,86 @@ impl CommitmentTreeDb {
         self.sparse_subtree_root(&shard_roots, 1 << SHARD_HEIGHT, SHARD_HEIGHT as u8)
     }
 
+    /// Build the rightmost populated path used to advance existing witnesses.
+    ///
+    /// Returns `None` when no leaves are stored locally, because the rightmost
+    /// lower-tier nodes are then unavailable.
+    pub fn frontier_update(&mut self, height: u64) -> Option<FrontierUpdate> {
+        if self.leaves.is_empty() {
+            return None;
+        }
+        let tree_size = self.tree_size();
+        let rightmost = tree_size.checked_sub(1)? as usize;
+        let shard_idx = rightmost / SHARD_LEAVES;
+        let subshard_idx = (rightmost / SUBSHARD_LEAVES) % SUBSHARDS_PER_SHARD;
+        let leaf_idx = rightmost % SUBSHARD_LEAVES;
+        let mut rightmost_nodes = [[0u8; 32]; TREE_DEPTH];
+
+        let leaves = self.subshard_leaves(shard_idx as u32, subshard_idx as u8);
+        let subshard_root =
+            self.fill_rightmost_tier(&leaves, leaf_idx, 0, SUBSHARD_HEIGHT, &mut rightmost_nodes);
+
+        let local_shard = shard_idx - self.window_start_shard() as usize;
+        let cache_slot = local_shard * SUBSHARDS_PER_SHARD + subshard_idx;
+        if let Some(slot) = self.ss_root_cache.get_mut(cache_slot) {
+            *slot = Some(subshard_root);
+        }
+
+        let frontier_subshard_roots = self.cached_subshard_roots(shard_idx as u32);
+        debug_assert_eq!(subshard_root, frontier_subshard_roots[subshard_idx]);
+        let shard_root = self.fill_rightmost_tier(
+            &frontier_subshard_roots,
+            subshard_idx,
+            SUBSHARD_HEIGHT,
+            SUBSHARD_HEIGHT,
+            &mut rightmost_nodes,
+        );
+
+        let window_start = self.window_start_shard() as usize;
+        let mut shard_roots = Vec::with_capacity(self.populated_shards() as usize);
+        for idx in 0..self.populated_shards() as usize {
+            let root = if idx < window_start {
+                self.prefetched_shard_roots
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(self.empty_roots[SHARD_HEIGHT])
+            } else {
+                let local_idx = idx - window_start;
+                if idx == shard_idx {
+                    if let Some(slot) = self.shard_root_cache.get_mut(local_idx) {
+                        *slot = Some(shard_root);
+                    }
+                    shard_root
+                } else if let Some(root) = self.shard_root_cache.get(local_idx).copied().flatten() {
+                    root
+                } else {
+                    let roots = self.cached_subshard_roots(idx as u32);
+                    let root = self.complete_subtree_root(&roots, SUBSHARD_HEIGHT as u8);
+                    if let Some(slot) = self.shard_root_cache.get_mut(local_idx) {
+                        *slot = Some(root);
+                    }
+                    root
+                }
+            };
+            shard_roots.push(root);
+        }
+
+        let root = self.fill_rightmost_tier(
+            &shard_roots,
+            shard_idx,
+            SHARD_HEIGHT,
+            SHARD_HEIGHT,
+            &mut rightmost_nodes,
+        );
+
+        Some(FrontierUpdate {
+            height,
+            tree_size,
+            root,
+            rightmost_nodes,
+        })
+    }
+
     // ── Broadcast / PIR database ─────────────────────────────────────
 
     /// Build PIR database bytes and broadcast payload in a single pass.
@@ -374,6 +470,7 @@ impl CommitmentTreeDb {
             }
 
             let shard_root = self.complete_subtree_root(&ss_roots, SUBSHARD_HEIGHT as u8);
+            self.shard_root_cache[i as usize] = Some(shard_root);
             cap_roots.push(shard_root);
             broadcast_ss.push(ShardSubRoots { roots: ss_roots });
         }
@@ -457,6 +554,60 @@ impl CommitmentTreeDb {
         };
 
         hash_combine(combine_level, &left, &right)
+    }
+
+    fn cached_subshard_roots(&mut self, shard_idx: u32) -> Vec<Hash> {
+        let shard_global_start = shard_idx as usize * SHARD_LEAVES;
+        let local_shard = shard_idx as usize - self.window_start_shard() as usize;
+        let total = self.tree_size() as usize;
+        let mut roots = Vec::with_capacity(SUBSHARDS_PER_SHARD);
+
+        for subshard in 0..SUBSHARDS_PER_SHARD {
+            let global_start = shard_global_start + subshard * SUBSHARD_LEAVES;
+            if global_start >= total {
+                roots.push(self.empty_roots[SUBSHARD_HEIGHT]);
+                continue;
+            }
+
+            let cache_slot = local_shard * SUBSHARDS_PER_SHARD + subshard;
+            if let Some(root) = self.ss_root_cache.get(cache_slot).copied().flatten() {
+                roots.push(root);
+                continue;
+            }
+
+            let leaves = self.subshard_leaves(shard_idx, subshard as u8);
+            let root = self.complete_subtree_root(&leaves, 0);
+            if let Some(slot) = self.ss_root_cache.get_mut(cache_slot) {
+                *slot = Some(root);
+            }
+            roots.push(root);
+        }
+        roots
+    }
+
+    fn fill_rightmost_tier(
+        &self,
+        nodes: &[Hash],
+        index: usize,
+        base_level: usize,
+        levels: usize,
+        path: &mut [Hash; TREE_DEPTH],
+    ) -> Hash {
+        let mut current = nodes.to_vec();
+        let mut idx = index;
+
+        for (level, node) in path.iter_mut().enumerate().skip(base_level).take(levels) {
+            *node = current[idx];
+            let mut parents = Vec::with_capacity(current.len().div_ceil(2));
+            for pair in current.chunks(2) {
+                let right = pair.get(1).copied().unwrap_or(self.empty_roots[level]);
+                parents.push(hash_combine(level as u8, &pair[0], &right));
+            }
+            current = parents;
+            idx /= 2;
+        }
+
+        current[0]
     }
 }
 
@@ -636,6 +787,40 @@ mod tests {
             root, empty,
             "non-empty tree root must differ from empty tree root"
         );
+    }
+
+    #[test]
+    fn frontier_update_matches_tree() {
+        let mut tree = CommitmentTreeDb::new();
+        let leaves: Vec<_> = (0..300).map(|i| make_leaf((i % 251 + 1) as u8)).collect();
+        tree.append_commitments(100, [1u8; 32], &leaves);
+
+        let update = tree.frontier_update(100).unwrap();
+
+        assert_eq!(update.height, 100);
+        assert_eq!(update.tree_size, 300);
+        assert_eq!(update.root, tree.tree_root());
+        assert_eq!(update.rightmost_nodes[0], leaves[299]);
+        assert_eq!(update.rightmost_nodes[8], tree.subshard_roots(0)[1]);
+        assert_eq!(update.rightmost_nodes[16], tree.shard_roots()[0].1);
+    }
+
+    #[test]
+    fn empty_tree_has_no_frontier_update() {
+        assert!(CommitmentTreeDb::new().frontier_update(100).is_none());
+    }
+
+    #[test]
+    fn windowed_frontier_update_matches_tree() {
+        let empty_shard = CommitmentTreeDb::new().empty_roots[SHARD_HEIGHT];
+        let mut tree = CommitmentTreeDb::with_offset(SHARD_LEAVES as u64, vec![empty_shard]);
+        tree.append_commitments(100, [1u8; 32], &[make_leaf(1), make_leaf(2)]);
+
+        let update = tree.frontier_update(100).unwrap();
+
+        assert_eq!(update.root, tree.tree_root());
+        assert_eq!(update.rightmost_nodes[0], make_leaf(2));
+        assert_eq!(update.rightmost_nodes[16], tree.shard_roots()[1].1);
     }
 
     #[test]

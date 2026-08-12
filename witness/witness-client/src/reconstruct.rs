@@ -28,7 +28,7 @@ pub fn reconstruct_witness(
 ) -> Result<PirWitness> {
     let mut siblings = [[0u8; 32]; TREE_DEPTH];
 
-    let leaves = parse_leaves(decoded_row)?;
+    let leaves = parse_subshard_leaves(decoded_row)?;
     extract_siblings(&leaves, leaf_idx as usize, 0, &mut siblings);
 
     let shard_offset = (shard_idx - broadcast.window_start_shard) as usize;
@@ -60,6 +60,66 @@ pub fn reconstruct_witness(
         anchor_height: broadcast.anchor_height,
         anchor_root,
     })
+}
+
+/// Advance a witness with public frontier data.
+///
+/// `leaf` is the witnessed note commitment. `subshard_leaves` is only needed
+/// while that note's 256-leaf subshard is still being populated. The update is
+/// committed only after its path reconstructs the advertised root; callers
+/// should fetch a fresh PIR witness when [`WitnessClientError::FrontierUpdateIncomplete`]
+/// is returned.
+pub fn update_witness(
+    witness: &mut PirWitness,
+    leaf: &Hash,
+    frontier: &FrontierUpdate,
+    subshard_leaves: Option<&[Hash; SUBSHARD_LEAVES]>,
+) -> Result<Hash> {
+    if frontier.tree_size == 0 || witness.position >= frontier.tree_size {
+        return Err(WitnessClientError::InvalidFrontierUpdate(format!(
+            "position {} is outside tree size {}",
+            witness.position, frontier.tree_size
+        )));
+    }
+    if frontier.height <= witness.anchor_height {
+        return Err(WitnessClientError::InvalidFrontierUpdate(format!(
+            "height {} does not advance witness height {}",
+            frontier.height, witness.anchor_height
+        )));
+    }
+
+    let mut siblings = witness.siblings;
+    let rightmost = frontier.tree_size - 1;
+    for (level, sibling) in siblings.iter_mut().enumerate() {
+        let sibling_pos = (witness.position >> level) ^ 1;
+        let rightmost_pos = rightmost >> level;
+        if sibling_pos == rightmost_pos {
+            *sibling = frontier.rightmost_nodes[level];
+        } else if sibling_pos > rightmost_pos {
+            *sibling = empty_root(level as u8);
+        }
+    }
+
+    if let Some(leaves) = subshard_leaves {
+        if leaves[witness.leaf_index() as usize] != *leaf {
+            return Err(WitnessClientError::InvalidFrontierUpdate(
+                "subshard leaves do not contain the witnessed commitment".into(),
+            ));
+        }
+        extract_siblings(leaves, witness.leaf_index() as usize, 0, &mut siblings);
+    }
+
+    let root = compute_root_from_path(witness.position, leaf, &siblings);
+    if root != frontier.root {
+        return Err(WitnessClientError::FrontierUpdateIncomplete(
+            frontier.height,
+        ));
+    }
+
+    witness.siblings = siblings;
+    witness.anchor_height = frontier.height;
+    witness.anchor_root = root;
+    Ok(root)
 }
 
 /// Given a complete array of 2^k nodes at a given base_level, extract the
@@ -131,7 +191,7 @@ fn empty_root(level: u8) -> Hash {
 }
 
 /// Parse the decoded PIR row bytes into 256 leaf hashes (32 bytes each).
-fn parse_leaves(decoded_row: &[u8]) -> Result<Vec<Hash>> {
+pub fn parse_subshard_leaves(decoded_row: &[u8]) -> Result<[Hash; SUBSHARD_LEAVES]> {
     if decoded_row.len() < SUBSHARD_ROW_BYTES {
         return Err(WitnessClientError::QueryFailed(format!(
             "decoded row too short: {} bytes, expected >= {}",
@@ -140,14 +200,12 @@ fn parse_leaves(decoded_row: &[u8]) -> Result<Vec<Hash>> {
         )));
     }
 
-    let mut leaves = Vec::with_capacity(SUBSHARD_LEAVES);
-    for i in 0..SUBSHARD_LEAVES {
+    Ok(std::array::from_fn(|i| {
         let start = i * 32;
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&decoded_row[start..start + 32]);
-        leaves.push(hash);
-    }
-    Ok(leaves)
+        hash
+    }))
 }
 
 #[cfg(test)]
@@ -157,14 +215,14 @@ mod tests {
     #[test]
     fn parse_leaves_correct_count() {
         let row = vec![0u8; SUBSHARD_ROW_BYTES];
-        let leaves = parse_leaves(&row).unwrap();
+        let leaves = parse_subshard_leaves(&row).unwrap();
         assert_eq!(leaves.len(), SUBSHARD_LEAVES);
     }
 
     #[test]
     fn parse_leaves_too_short() {
         let row = vec![0u8; SUBSHARD_ROW_BYTES - 1];
-        assert!(parse_leaves(&row).is_err());
+        assert!(parse_subshard_leaves(&row).is_err());
     }
 
     #[test]
@@ -201,5 +259,134 @@ mod tests {
             empty_root(1),
             "level 1 sibling is root of pair (2,3)"
         );
+    }
+
+    fn leaf(tag: u64) -> Hash {
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&tag.to_le_bytes());
+        hash
+    }
+
+    fn path_for(leaves: &[Hash], position: usize) -> ([Hash; TREE_DEPTH], Hash) {
+        let mut siblings = [[0u8; 32]; TREE_DEPTH];
+        let mut current = leaves.to_vec();
+        let mut index = position;
+
+        for (level, sibling) in siblings.iter_mut().enumerate() {
+            *sibling = current
+                .get(index ^ 1)
+                .copied()
+                .unwrap_or_else(|| empty_root(level as u8));
+            current = current
+                .chunks(2)
+                .map(|pair| {
+                    hash_combine(
+                        level as u8,
+                        &pair[0],
+                        &pair
+                            .get(1)
+                            .copied()
+                            .unwrap_or_else(|| empty_root(level as u8)),
+                    )
+                })
+                .collect();
+            index /= 2;
+        }
+
+        (siblings, current[0])
+    }
+
+    fn frontier_for(height: u64, leaves: &[Hash]) -> FrontierUpdate {
+        let mut rightmost_nodes = [[0u8; 32]; TREE_DEPTH];
+        let mut current = leaves.to_vec();
+        let mut index = leaves.len() - 1;
+
+        for (level, node) in rightmost_nodes.iter_mut().enumerate() {
+            *node = current[index];
+            current = current
+                .chunks(2)
+                .map(|pair| {
+                    hash_combine(
+                        level as u8,
+                        &pair[0],
+                        &pair
+                            .get(1)
+                            .copied()
+                            .unwrap_or_else(|| empty_root(level as u8)),
+                    )
+                })
+                .collect();
+            index /= 2;
+        }
+
+        FrontierUpdate {
+            height,
+            tree_size: leaves.len() as u64,
+            root: current[0],
+            rightmost_nodes,
+        }
+    }
+
+    #[test]
+    fn update_witness_advances_with_frontier_subshard_leaves() {
+        let old_leaves = vec![leaf(1), leaf(2)];
+        let (siblings, old_root) = path_for(&old_leaves, 0);
+        let mut witness = PirWitness {
+            position: 0,
+            siblings,
+            anchor_height: 100,
+            anchor_root: old_root,
+        };
+        let new_leaves = vec![leaf(1), leaf(2), leaf(3)];
+        let frontier = frontier_for(101, &new_leaves);
+        let mut subshard = [empty_root(0); SUBSHARD_LEAVES];
+        subshard[..new_leaves.len()].copy_from_slice(&new_leaves);
+
+        let root = update_witness(&mut witness, &leaf(1), &frontier, Some(&subshard)).unwrap();
+
+        assert_eq!(root, frontier.root);
+        assert_eq!(witness.anchor_height, 101);
+        assert_eq!(witness.anchor_root, frontier.root);
+    }
+
+    #[test]
+    fn update_witness_completed_subshard_needs_no_leaf_cache() {
+        let old_leaves: Vec<_> = (1..=256).map(leaf).collect();
+        let (siblings, old_root) = path_for(&old_leaves, 0);
+        let mut witness = PirWitness {
+            position: 0,
+            siblings,
+            anchor_height: 100,
+            anchor_root: old_root,
+        };
+        let mut new_leaves = old_leaves;
+        new_leaves.push(leaf(257));
+        let frontier = frontier_for(101, &new_leaves);
+
+        update_witness(&mut witness, &leaf(1), &frontier, None).unwrap();
+
+        assert_eq!(witness.anchor_root, frontier.root);
+    }
+
+    #[test]
+    fn update_witness_fails_atomically_when_path_is_insufficient() {
+        let old_leaves: Vec<_> = (1..=511).map(leaf).collect();
+        let (siblings, old_root) = path_for(&old_leaves, 0);
+        let mut witness = PirWitness {
+            position: 0,
+            siblings,
+            anchor_height: 100,
+            anchor_root: old_root,
+        };
+        let original = witness.clone();
+        let mut new_leaves = old_leaves;
+        new_leaves.extend([leaf(512), leaf(513)]);
+        let frontier = frontier_for(101, &new_leaves);
+
+        assert!(matches!(
+            update_witness(&mut witness, &leaf(1), &frontier, None),
+            Err(WitnessClientError::FrontierUpdateIncomplete(101))
+        ));
+        assert_eq!(witness, original);
     }
 }

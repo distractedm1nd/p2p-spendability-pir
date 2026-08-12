@@ -1,10 +1,10 @@
 use crate::state::AppState;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pir_types::{PirEngine, ServerPhase};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Serialize)]
@@ -49,6 +49,23 @@ pub async fn broadcast<P: PirEngine + 'static>(State(state): State<Arc<AppState<
     match pir.as_ref() {
         Some(ps) => Json(&ps.broadcast).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FrontierRange {
+    from: u64,
+    to: u64,
+}
+
+pub async fn frontier<P: PirEngine + 'static>(
+    State(state): State<Arc<AppState<P>>>,
+    Query(range): Query<FrontierRange>,
+) -> Response {
+    match state.frontier_range(range.from, range.to) {
+        Some(updates) => Json(updates).into_response(),
+        None if range.from > range.to => StatusCode::BAD_REQUEST.into_response(),
+        None => StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
     }
 }
 

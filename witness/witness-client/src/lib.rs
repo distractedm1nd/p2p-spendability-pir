@@ -21,6 +21,12 @@ pub enum WitnessClientError {
     PositionOutsideWindow(u64, u32, u32),
     #[error("witness verification failed for position {0}: computed root does not match anchor")]
     VerificationFailed(u64),
+    #[error("invalid frontier update: {0}")]
+    InvalidFrontierUpdate(String),
+    #[error("frontier update at height {0} is insufficient; fetch a fresh PIR witness")]
+    FrontierUpdateIncomplete(u64),
+    #[error("frontier updates for heights {0}..={1} are unavailable")]
+    FrontierUnavailable(u64, u64),
 }
 
 pub type Result<T> = std::result::Result<T, WitnessClientError>;
@@ -102,6 +108,15 @@ impl WitnessClient {
     /// the cached broadcast data to reconstruct the full 32-level authentication
     /// path. Self-verifies the witness before returning.
     pub async fn get_witness(&self, position: u64) -> Result<PirWitness> {
+        Ok(self.get_witness_with_subshard(position).await?.0)
+    }
+
+    /// Fetch a witness and the decoded 256-leaf subshard needed to keep a
+    /// frontier-subshard witness current without another PIR query.
+    pub async fn get_witness_with_subshard(
+        &self,
+        position: u64,
+    ) -> Result<(PirWitness, [Hash; SUBSHARD_LEAVES])> {
         let t0 = std::time::Instant::now();
         let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
         let window_end = self.broadcast.window_start_shard + self.broadcast.window_shard_count;
@@ -179,7 +194,8 @@ impl WitnessClient {
             "witness reconstructed",
         );
 
-        Ok(witness)
+        let leaves = reconstruct::parse_subshard_leaves(&decoded_row)?;
+        Ok((witness, leaves))
     }
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).
@@ -196,6 +212,24 @@ impl WitnessClient {
 
         self.broadcast = resp.error_for_status()?.json().await?;
         Ok(())
+    }
+
+    /// Fetch an inclusive, gap-free range of public frontier updates.
+    pub async fn get_frontier_updates(&self, from: u64, to: u64) -> Result<Vec<FrontierUpdate>> {
+        if from > to {
+            return Err(WitnessClientError::InvalidFrontierUpdate(format!(
+                "invalid height range {from}..={to}"
+            )));
+        }
+        let response = self
+            .http
+            .get(format!("{}/frontier?from={from}&to={to}", self.base_url))
+            .send()
+            .await?;
+        if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Err(WitnessClientError::FrontierUnavailable(from, to));
+        }
+        Ok(response.error_for_status()?.json().await?)
     }
 
     pub fn anchor_height(&self) -> u64 {
