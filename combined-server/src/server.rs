@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
+use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "nullifier")]
 use hashtable_pir::HashTableDb;
@@ -132,6 +133,41 @@ async fn combined_health(State(state): State<Arc<CombinedHealthState>>) -> impl 
     (status, axum::Json(body))
 }
 
+/// Create both application states before starting sync or any frontend.
+#[cfg(all(feature = "nullifier", feature = "witness"))]
+pub fn create_app_states<NfP: PirEngine, WitP: PirEngine>(
+    config: &CombinedConfig,
+    nf_engine: Arc<NfP>,
+    wit_engine: Arc<WitP>,
+) -> (
+    Arc<spend_server::state::AppState<NfP>>,
+    Arc<witness_server::state::AppState<WitP>>,
+) {
+    let nullifier = Arc::new(spend_server::state::AppState::new(
+        spend_server::state::ServerConfig {
+            target_size: config.target_size,
+            confirmation_depth: CONFIRMATION_DEPTH,
+            snapshot_interval: config.snapshot_interval,
+            data_dir: config.data_dir.join("nullifier"),
+            lwd_urls: config.lwd_urls.clone(),
+            listen_addr: config.listen_addr,
+        },
+        nf_engine,
+    ));
+    let witness = Arc::new(witness_server::state::AppState::new(
+        witness_server::state::ServerConfig {
+            snapshot_interval: config.snapshot_interval,
+            data_dir: config.data_dir.join("witness"),
+            lwd_urls: config.lwd_urls.clone(),
+            listen_addr: config.listen_addr,
+            window_shard_limit: witness_server::state::DEFAULT_WINDOW_SHARD_LIMIT,
+        },
+        wit_engine,
+    ));
+
+    (nullifier, witness)
+}
+
 /// Main entry point for the combined PIR server.
 pub async fn run<
     #[cfg(feature = "nullifier")] NfP: PirEngine + 'static,
@@ -141,59 +177,134 @@ pub async fn run<
     #[cfg(feature = "nullifier")] nf_engine: Arc<NfP>,
     #[cfg(feature = "witness")] wit_engine: Arc<WitP>,
 ) -> Result<()> {
-    // --- Sync phase ---
+    run_inner(
+        config,
+        #[cfg(feature = "nullifier")]
+        nf_engine,
+        #[cfg(feature = "witness")]
+        wit_engine,
+        #[cfg(all(feature = "nullifier", feature = "witness"))]
+        None,
+        CancellationToken::new(),
+    )
+    .await
+}
 
+#[cfg(all(feature = "nullifier", feature = "witness"))]
+pub async fn run_with_states<NfP: PirEngine + 'static, WitP: PirEngine + 'static>(
+    config: CombinedConfig,
+    nf_state: Arc<spend_server::state::AppState<NfP>>,
+    wit_state: Arc<witness_server::state::AppState<WitP>>,
+) -> Result<()> {
+    run_with_states_until(config, nf_state, wit_state, CancellationToken::new()).await
+}
+
+/// Run the complete combined lifecycle using caller-created states until
+/// `shutdown` is cancelled.
+#[cfg(all(feature = "nullifier", feature = "witness"))]
+pub async fn run_with_states_until<NfP: PirEngine + 'static, WitP: PirEngine + 'static>(
+    config: CombinedConfig,
+    nf_state: Arc<spend_server::state::AppState<NfP>>,
+    wit_state: Arc<witness_server::state::AppState<WitP>>,
+    shutdown: CancellationToken,
+) -> Result<()> {
+    let nf_engine = nf_state.engine.clone();
+    let wit_engine = wit_state.engine.clone();
+    run_inner(
+        config,
+        nf_engine,
+        wit_engine,
+        Some((nf_state, wit_state)),
+        shutdown,
+    )
+    .await
+}
+
+async fn run_inner<
+    #[cfg(feature = "nullifier")] NfP: PirEngine + 'static,
+    #[cfg(feature = "witness")] WitP: PirEngine + 'static,
+>(
+    config: CombinedConfig,
+    #[cfg(feature = "nullifier")] nf_engine: Arc<NfP>,
+    #[cfg(feature = "witness")] wit_engine: Arc<WitP>,
+    #[cfg(all(feature = "nullifier", feature = "witness"))] provided_states: Option<(
+        Arc<spend_server::state::AppState<NfP>>,
+        Arc<witness_server::state::AppState<WitP>>,
+    )>,
+    shutdown: CancellationToken,
+) -> Result<()> {
     #[cfg(feature = "nullifier")]
-    let nf_config = {
-        let nf_data_dir = config.data_dir.join("nullifier");
-        spend_server::state::ServerConfig {
-            target_size: config.target_size,
-            confirmation_depth: CONFIRMATION_DEPTH,
-            snapshot_interval: config.snapshot_interval,
-            data_dir: nf_data_dir,
-            lwd_urls: config.lwd_urls.clone(),
-            listen_addr: config.listen_addr,
-        }
+    let nf_config = spend_server::state::ServerConfig {
+        target_size: config.target_size,
+        confirmation_depth: CONFIRMATION_DEPTH,
+        snapshot_interval: config.snapshot_interval,
+        data_dir: config.data_dir.join("nullifier"),
+        lwd_urls: config.lwd_urls.clone(),
+        listen_addr: config.listen_addr,
     };
-
     #[cfg(feature = "witness")]
-    let wit_config = {
-        let wit_data_dir = config.data_dir.join("witness");
-        witness_server::state::ServerConfig {
-            snapshot_interval: config.snapshot_interval,
-            data_dir: wit_data_dir,
-            lwd_urls: config.lwd_urls.clone(),
-            listen_addr: config.listen_addr,
-            window_shard_limit: witness_server::state::DEFAULT_WINDOW_SHARD_LIMIT,
-        }
+    let wit_config = witness_server::state::ServerConfig {
+        snapshot_interval: config.snapshot_interval,
+        data_dir: config.data_dir.join("witness"),
+        lwd_urls: config.lwd_urls.clone(),
+        listen_addr: config.listen_addr,
+        window_shard_limit: witness_server::state::DEFAULT_WINDOW_SHARD_LIMIT,
     };
 
     tracing::info!("starting sync for enabled subsystems");
 
+    if shutdown.is_cancelled() {
+        return Ok(());
+    }
+
     #[cfg(all(feature = "nullifier", feature = "witness"))]
-    let ((nf_state, mut hashtable), (wit_state, mut tree)) = {
-        let nf_sync = spend_server::server::run_sync_only(nf_config.clone(), nf_engine.clone());
-        let wit_sync =
-            witness_server::server::run_sync_only(wit_config.clone(), wit_engine.clone());
-        let (nf_result, wit_result) = tokio::join!(nf_sync, wit_sync);
-        (
-            nf_result.map_err(ServerError::Nullifier)?,
-            wit_result.map_err(ServerError::Witness)?,
-        )
-    };
+    let ((nf_state, mut hashtable), (wit_state, mut tree)) =
+        if let Some((nf_state, wit_state)) = provided_states {
+            let sync = async {
+                tokio::join!(
+                    spend_server::server::sync_into(nf_state.clone()),
+                    witness_server::server::sync_into(wit_state.clone()),
+                )
+            };
+            let (nf_result, wit_result) = tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                results = sync => results,
+            };
+            (
+                (nf_state, nf_result.map_err(ServerError::Nullifier)?),
+                (wit_state, wit_result.map_err(ServerError::Witness)?),
+            )
+        } else {
+            let sync = async {
+                tokio::join!(
+                    spend_server::server::run_sync_only(nf_config, nf_engine.clone()),
+                    witness_server::server::run_sync_only(wit_config, wit_engine.clone()),
+                )
+            };
+            let (nf_result, wit_result) = tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                results = sync => results,
+            };
+            (
+                nf_result.map_err(ServerError::Nullifier)?,
+                wit_result.map_err(ServerError::Witness)?,
+            )
+        };
 
     #[cfg(all(feature = "nullifier", not(feature = "witness")))]
-    let (nf_state, mut hashtable) = {
-        spend_server::server::run_sync_only(nf_config.clone(), nf_engine.clone())
-            .await
-            .map_err(ServerError::Nullifier)?
+    let (nf_state, mut hashtable) = tokio::select! {
+        _ = shutdown.cancelled() => return Ok(()),
+        result = spend_server::server::run_sync_only(nf_config, nf_engine.clone()) => {
+            result.map_err(ServerError::Nullifier)?
+        }
     };
 
     #[cfg(all(feature = "witness", not(feature = "nullifier")))]
-    let (wit_state, mut tree) = {
-        witness_server::server::run_sync_only(wit_config.clone(), wit_engine.clone())
-            .await
-            .map_err(ServerError::Witness)?
+    let (wit_state, mut tree) = tokio::select! {
+        _ = shutdown.cancelled() => return Ok(()),
+        result = witness_server::server::run_sync_only(wit_config, wit_engine.clone()) => {
+            result.map_err(ServerError::Witness)?
+        }
     };
 
     tracing::info!("sync complete, building router");
@@ -230,7 +341,7 @@ pub async fn run<
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!(listen = %config.listen_addr, "http server started");
-    let _http_handle = tokio::spawn(async move {
+    let http_handle = tokio::spawn(async move {
         axum::serve(listener, router).await.ok();
     });
 
@@ -306,10 +417,17 @@ pub async fn run<
     let mut nf_prev_tree_size: Option<u32> = None;
 
     loop {
-        let (tip_height, _) = client.get_latest_block().await?;
+        let latest_block = tokio::select! {
+            _ = shutdown.cancelled() => break,
+            latest_block = client.get_latest_block() => latest_block?,
+        };
+        let (tip_height, _) = latest_block;
 
         if tip_height <= current_height {
-            sleep(FOLLOW_POLL_INTERVAL).await;
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = sleep(FOLLOW_POLL_INTERVAL) => {}
+            }
             continue;
         }
 
@@ -448,8 +566,15 @@ pub async fn run<
             tracing::info!("periodic snapshots saved");
         }
 
-        sleep(FOLLOW_POLL_INTERVAL).await;
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = sleep(FOLLOW_POLL_INTERVAL) => {}
+        }
     }
+
+    tracing::info!("stopping combined PIR server");
+    http_handle.abort();
+    Ok(())
 }
 
 #[cfg(feature = "nullifier")]

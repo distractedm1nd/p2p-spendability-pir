@@ -13,6 +13,7 @@ Both are sync-time accelerators: once the wallet catches up, PIR is unnecessary.
 - [Nullifier PIR](nullifier/README.md) — hash table design, server architecture, client protocol, parameters
 - [Witness PIR](witness/README.md) — tree decomposition, broadcast + PIR tiers, witness reconstruction
 - [Wallet Integration](docs/pir_wallet_integration.md) — FFI contracts, database schema, feature flags, spendability gates
+- [Zakura P2P Node](zakura-server/README.md) — embedded `zakurad`, native request/response protocol, deployment
 
 ## Workspace
 
@@ -33,6 +34,8 @@ spendability-pir/
 │   ├── commitment-tree-db/   # In-memory Merkle tree, sub-shard decomposition
 │   ├── witness-server/       # Axum HTTP server, broadcast + YPIR serving
 │   └── witness-client/       # WitnessClient with get_witness(position) API
+├── combined-server/          # Owns shared AppStates; normal YPIR binary hosts HTTP + Zakura
+├── zakura-server/            # Native Zakura PIR transport library
 └── proto/                    # Shared protobuf definitions
 ```
 

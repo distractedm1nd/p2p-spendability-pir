@@ -352,7 +352,14 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
     config: ServerConfig,
     engine: Arc<P>,
 ) -> Result<(Arc<AppState<P>>, HashTableDb)> {
-    let app_state = Arc::new(AppState::new(config.clone(), engine.clone()));
+    let app_state = Arc::new(AppState::new(config, engine));
+    let hashtable = sync_into(app_state.clone()).await?;
+    Ok((app_state, hashtable))
+}
+
+pub async fn sync_into<P: PirEngine + 'static>(app_state: Arc<AppState<P>>) -> Result<HashTableDb> {
+    let config = app_state.config.clone();
+    let engine = app_state.engine.clone();
 
     let mut client = nf_ingest::LwdClient::connect(&config.lwd_urls)
         .await
@@ -423,5 +430,5 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
     app_state.live_pir.store(Arc::new(Some(pir_state)));
     app_state.phase.store(Arc::new(ServerPhase::Serving));
 
-    Ok((app_state, hashtable))
+    Ok(hashtable)
 }
