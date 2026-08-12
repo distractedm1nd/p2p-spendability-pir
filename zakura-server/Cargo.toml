@@ -10,6 +10,7 @@ ypir = [
     "dep:zakura-network",
     "dep:spend-server",
     "dep:witness-server",
+    "dep:pir-types",
     "dep:thiserror",
     "dep:serde",
     "dep:serde_json",
@@ -21,6 +22,7 @@ ypir = [
 zakura-network = { path = "../../zakura/crates/zakura-network", optional = true }
 spend-server = { path = "../nullifier/spend-server", default-features = false, features = ["ypir"], optional = true }
 witness-server = { path = "../witness/witness-server", default-features = false, features = ["ypir"], optional = true }
+pir-types = { path = "../shared/pir-types", optional = true }
 
 thiserror = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
