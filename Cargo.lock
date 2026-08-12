@@ -937,7 +937,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
  "valar-ypir",
  "witness-server",
  "witness-types",
@@ -2814,18 +2814,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inspiring"
-version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=aff18bda01125b81e3c7d197371f59b0f02f9c4e#aff18bda01125b81e3c7d197371f59b0f02f9c4e"
-dependencies = [
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rayon",
- "thiserror 1.0.69",
- "valar-spiral-rs 0.5.2 (git+https://github.com/valargroup/spiral-rs.git?rev=6f5b66c6a5a639827c6486c59d31c7ec2d4399a8)",
-]
-
-[[package]]
 name = "instant"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2848,26 +2836,6 @@ dependencies = [
  "windows-registry",
  "windows-result 0.4.1",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "ipir-sp"
-version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=aff18bda01125b81e3c7d197371f59b0f02f9c4e#aff18bda01125b81e3c7d197371f59b0f02f9c4e"
-dependencies = [
- "clap",
- "env_logger",
- "fastrand",
- "inspiring",
- "log",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rayon",
- "serde",
- "serde_json",
- "sha1",
- "simplepir-kernel",
- "valar-spiral-rs 0.5.2 (git+https://github.com/valargroup/spiral-rs.git?rev=6f5b66c6a5a639827c6486c59d31c7ec2d4399a8)",
 ]
 
 [[package]]
@@ -5787,15 +5755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "simplepir-kernel"
-version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=aff18bda01125b81e3c7d197371f59b0f02f9c4e#aff18bda01125b81e3c7d197371f59b0f02f9c4e"
-dependencies = [
- "inspiring",
- "valar-spiral-rs 0.5.2 (git+https://github.com/valargroup/spiral-rs.git?rev=6f5b66c6a5a639827c6486c59d31c7ec2d4399a8)",
-]
-
-[[package]]
 name = "sinsemilla"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5888,8 +5847,6 @@ version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "hashtable-pir",
- "inspiring",
- "ipir-sp",
  "nf-ingest",
  "reqwest",
  "serde_json",
@@ -5901,7 +5858,7 @@ dependencies = [
  "tokio-stream",
  "tonic 0.12.3",
  "tracing",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
  "valar-ypir",
 ]
 
@@ -5913,8 +5870,6 @@ dependencies = [
  "axum 0.7.9",
  "clap",
  "hashtable-pir",
- "inspiring",
- "ipir-sp",
  "nf-ingest",
  "reqwest",
  "serde",
@@ -5928,7 +5883,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
  "valar-ypir",
 ]
 
@@ -6973,20 +6928,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "valar-spiral-rs"
-version = "0.5.2"
-source = "git+https://github.com/valargroup/spiral-rs.git?rev=6f5b66c6a5a639827c6486c59d31c7ec2d4399a8#6f5b66c6a5a639827c6486c59d31c7ec2d4399a8"
-dependencies = [
- "fastrand",
- "getrandom 0.2.17",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
-]
-
-[[package]]
 name = "valar-ypir"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7003,7 +6944,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "test-log",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
 ]
 
 [[package]]
@@ -7837,8 +7778,6 @@ dependencies = [
  "commitment-tree-db",
  "hex",
  "incrementalmerkletree",
- "inspiring",
- "ipir-sp",
  "orchard 0.14.0",
  "pir-types",
  "reqwest",
@@ -7848,7 +7787,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
  "valar-ypir",
  "witness-server",
  "witness-types",
@@ -7865,8 +7804,6 @@ dependencies = [
  "commitment-ingest",
  "commitment-tree-db",
  "hex",
- "inspiring",
- "ipir-sp",
  "pir-types",
  "reqwest",
  "serde",
@@ -7877,7 +7814,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
- "valar-spiral-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "valar-spiral-rs",
  "valar-ypir",
  "witness-client",
  "witness-types",

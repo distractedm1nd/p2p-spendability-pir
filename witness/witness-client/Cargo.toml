@@ -3,11 +3,6 @@ name = "witness-client"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-ypir = []
-ipir = ["dep:ipir-sp", "dep:inspiring"]
-
 [dependencies]
 witness-types = { path = "../witness-types" }
 pir-types = { path = "../../shared/pir-types" }
@@ -15,8 +10,6 @@ orchard = { version = "0.14", default-features = false }
 incrementalmerkletree = "0.8"
 ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"

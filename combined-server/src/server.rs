@@ -12,12 +12,12 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "nullifier")]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use hashtable_pir::HashTableDb;
 #[cfg(feature = "nullifier")]
 use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
 
-#[cfg(feature = "witness")]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 use commitment_tree_db::CommitmentTreeDb;
 #[cfg(feature = "witness")]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
@@ -577,7 +577,7 @@ async fn run_inner<
     Ok(())
 }
 
-#[cfg(feature = "nullifier")]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 async fn catch_up_nullifier(
     lwd_urls: &[String],
     from: u64,
@@ -592,7 +592,7 @@ async fn catch_up_nullifier(
     Ok(())
 }
 
-#[cfg(feature = "witness")]
+#[cfg(all(feature = "nullifier", feature = "witness"))]
 async fn catch_up_witness(
     lwd_urls: &[String],
     from: u64,

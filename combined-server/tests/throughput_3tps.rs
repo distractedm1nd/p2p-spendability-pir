@@ -1,4 +1,4 @@
-#![cfg(all(feature = "nullifier", feature = "witness", feature = "ypir"))]
+#![cfg(all(feature = "nullifier", feature = "witness"))]
 
 //! Throughput tests proving the system handles high TPS within its
 //! per-block rebuild budget.
@@ -7,25 +7,29 @@
 //! - `sustained_5tps_15s_blocks`: 2-minute sustained run at 5 TPS / 15 s blocks
 //!
 //! Run in release mode for meaningful YPIR timing:
-//!   cargo test --release -p combined-server --features ypir --test throughput_3tps -- --nocapture
+//!   cargo test --release -p combined-server --test throughput_3tps -- --nocapture
 
 use arc_swap::ArcSwap;
 use commitment_tree_db::CommitmentTreeDb;
 use hashtable_pir::HashTableDb;
 use pir_types::{PirEngine, YpirScenario};
-use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
+use spend_types::{NullifierWithMeta, BUCKET_BYTES, NUM_BUCKETS};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
-fn make_nf(seed: u32) -> [u8; 32] {
+fn make_nf(seed: u32) -> NullifierWithMeta {
     let mut nf = [0u8; 32];
     nf[0..4].copy_from_slice(&seed.to_le_bytes());
     for (i, byte) in nf.iter_mut().enumerate().skip(4) {
         *byte = ((seed >> ((i % 4) * 8)) as u8).wrapping_add(i as u8);
     }
-    nf
+    NullifierWithMeta {
+        nullifier: nf,
+        first_output_position: 0,
+        action_count: 1,
+    }
 }
 
 /// Produce a valid Pallas base field element (valid `MerkleHashOrchard` bytes).
@@ -100,7 +104,7 @@ fn rebuild_under_20s_at_3tps() {
     let mut tree = CommitmentTreeDb::new();
 
     for blk in 1..=warmup_blocks {
-        let nfs: Vec<[u8; 32]> = (0..actions_per_block)
+        let nfs: Vec<NullifierWithMeta> = (0..actions_per_block)
             .map(|j| make_nf(blk as u32 * 10_000 + j))
             .collect();
         let cmxs: Vec<[u8; 32]> = (0..actions_per_block)
@@ -135,7 +139,7 @@ fn rebuild_under_20s_at_3tps() {
 
     // Simulate one new block
     let new_height = warmup_blocks + 1;
-    let new_nfs: Vec<[u8; 32]> = (0..actions_per_block)
+    let new_nfs: Vec<NullifierWithMeta> = (0..actions_per_block)
         .map(|j| make_nf(99_000 + j))
         .collect();
     let new_cmxs: Vec<[u8; 32]> = (0..actions_per_block)
@@ -235,7 +239,7 @@ fn sustained_5tps_15s_blocks() {
     let mut tree = CommitmentTreeDb::new();
 
     for blk in 1..=WARMUP_BLOCKS {
-        let nfs: Vec<[u8; 32]> = (0..ACTIONS_PER_BLOCK)
+        let nfs: Vec<NullifierWithMeta> = (0..ACTIONS_PER_BLOCK)
             .map(|j| make_nf(blk as u32 * 10_000 + j))
             .collect();
         let cmxs: Vec<[u8; 32]> = (0..ACTIONS_PER_BLOCK)
@@ -316,7 +320,7 @@ fn sustained_5tps_15s_blocks() {
         let height = WARMUP_BLOCKS + 1 + i;
         let seed_base = (height as u32) * 10_000;
 
-        let nfs: Vec<[u8; 32]> = (0..ACTIONS_PER_BLOCK)
+        let nfs: Vec<NullifierWithMeta> = (0..ACTIONS_PER_BLOCK)
             .map(|j| make_nf(seed_base + j))
             .collect();
         let cmxs: Vec<[u8; 32]> = (0..ACTIONS_PER_BLOCK)

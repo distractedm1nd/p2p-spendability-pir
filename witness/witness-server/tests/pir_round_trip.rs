@@ -1,5 +1,3 @@
-#![cfg(feature = "ypir")]
-
 //! End-to-end PIR round-trip test against mainnet.
 //!
 //! This test exercises the full witness-serving stack: it syncs from

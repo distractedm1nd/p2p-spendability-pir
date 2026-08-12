@@ -4,17 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
-ypir = []
-ipir = ["dep:ipir-sp", "dep:inspiring"]
 live = []
 
 [dependencies]
 spend-types = { path = "../spend-types" }
 ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -22,7 +17,7 @@ thiserror = "2"
 tracing = "0.1"
 
 [dev-dependencies]
-spend-server = { path = "../spend-server", features = ["ypir", "ipir"] }
+spend-server = { path = "../spend-server" }
 hashtable-pir = { path = "../hashtable-pir" }
 nf-ingest = { path = "../nf-ingest" }
 axum = "0.7"

@@ -1,11 +1,6 @@
-#![cfg(any(feature = "ypir", feature = "ipir"))]
-
 use nf_ingest::proto::compact_tx_streamer_server::{CompactTxStreamer, CompactTxStreamerServer};
 use nf_ingest::proto::*;
 use spend_client::SpendClient;
-#[cfg(feature = "ipir")]
-use spend_server::pir_ipir::IpirPirEngine;
-#[cfg(all(feature = "ypir", not(feature = "ipir")))]
 use spend_server::pir_ypir::YpirPirEngine;
 use spend_server::server::{build_router, run_sync_only};
 use spend_server::state::ServerConfig;
@@ -257,18 +252,9 @@ fn make_compact_block(
 // ── End-to-end test ──
 
 #[tokio::test]
-#[cfg(all(feature = "ypir", not(feature = "ipir")))]
 async fn test_end_to_end_is_spent() {
     let scenario = scenario();
     run_end_to_end_is_spent(Arc::new(YpirPirEngine::new(&scenario))).await;
-}
-
-#[tokio::test]
-#[cfg(feature = "ipir")]
-async fn test_ipir_end_to_end_is_spent() {
-    let scenario = scenario();
-    let engine = Arc::new(IpirPirEngine::new(&scenario).unwrap());
-    run_end_to_end_is_spent(engine).await;
 }
 
 fn scenario() -> YpirScenario {
