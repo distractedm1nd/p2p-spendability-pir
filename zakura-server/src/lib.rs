@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use pir_types::PirEngine;
 use spend_server::state::AppState as SpendState;
 use witness_server::state::AppState as WitnessState;
 use zakura_network::zakura::{
@@ -34,6 +35,8 @@ pub enum P2PError {
     ServiceUnavailable,
     #[error("serde error: {0}")]
     SerdeError(String),
+    #[error("PIR query failed: {0}")]
+    QueryError(String),
 }
 
 impl From<serde_json::Error> for P2PError {
@@ -185,15 +188,36 @@ impl P2pPirService {
     }
 
     async fn witness_broadcast(&self) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+        let pir = self.witness_state.live_pir.load();
+        let broadcast = match pir.as_ref() {
+            Some(pir_state) => &pir_state.broadcast,
+            None => return Err(P2PError::ServiceUnavailable),
+        };
+
+        Self::to_frame(broadcast, Message::WitnessBroadcastRes)
     }
 
     async fn witness_params(&self) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+        Self::to_frame(&self.witness_state.scenario, Message::WitnessParamsRes)
     }
 
-    async fn witness_query(&self, _payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
-        Err(P2PError::ServiceUnavailable)
+    async fn witness_query(&self, payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
+        let pir = self.witness_state.live_pir.load();
+        let pir_state = match pir.as_ref() {
+            Some(pir_state) => pir_state,
+            None => return Err(P2PError::ServiceUnavailable),
+        };
+        let payload = self
+            .witness_state
+            .engine
+            .answer_query(&pir_state.engine_state, &payload)
+            .map_err(|error| P2PError::QueryError(error.to_string()))?;
+
+        Ok(vec![Frame {
+            message_type: Message::WitnessQueryRes.into(),
+            flags: 0,
+            payload,
+        }])
     }
 
     async fn forward(&self, frame: Frame) -> Result<Vec<Frame>, SinkReject> {
@@ -315,5 +339,60 @@ impl Service for P2pPirService {
         if let Ok(mut peers) = self.active_peers.lock() {
             peers.remove(&(peer.clone(), conn_id));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{net::SocketAddr, path::PathBuf};
+
+    #[tokio::test]
+    async fn witness_params_are_available_before_pir_setup() {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let witness_scenario = pir_types::YpirScenario {
+            num_items: 8_192,
+            item_size_bits: 65_536,
+        };
+        let spend_scenario = pir_types::YpirScenario {
+            num_items: 16_384,
+            item_size_bits: 36_736,
+        };
+        let witness_state = Arc::new(WitnessState::new(
+            witness_server::state::ServerConfig {
+                snapshot_interval: 1,
+                data_dir: PathBuf::new(),
+                lwd_urls: vec![],
+                listen_addr: addr,
+                window_shard_limit: 32,
+            },
+            Arc::new(WitnessPirEngine::new(&witness_scenario)),
+        ));
+        let spend_state = Arc::new(SpendState::new(
+            spend_server::state::ServerConfig {
+                target_size: 1,
+                confirmation_depth: 1,
+                snapshot_interval: 1,
+                data_dir: PathBuf::new(),
+                lwd_urls: vec![],
+                listen_addr: addr,
+            },
+            Arc::new(SpendPirEngine::new(&spend_scenario)),
+        ));
+        let service = P2pPirService::new(witness_state, spend_state);
+
+        let frames = service
+            .forward(Frame {
+                message_type: Message::WitnessParamsReq.into(),
+                flags: 0,
+                payload: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(frames[0].message_type, u16::from(Message::WitnessParamsRes));
+        let scenario: pir_types::YpirScenario = serde_json::from_slice(&frames[0].payload).unwrap();
+        assert_eq!(scenario.num_items, witness_scenario.num_items);
+        assert_eq!(scenario.item_size_bits, witness_scenario.item_size_bits);
     }
 }
