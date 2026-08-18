@@ -288,10 +288,7 @@ async fn query_server_witness(
 }
 
 /// Returns the canonical PIR row slice and row coordinates for a position.
-fn reference_decoded_row<'a>(
-    canonical: &'a CanonicalReference,
-    position: u64,
-) -> (&'a [u8], u32, u8, u8) {
+fn reference_decoded_row(canonical: &CanonicalReference, position: u64) -> (&[u8], u32, u8, u8) {
     let (shard_idx, subshard_idx, leaf_idx, row_start, row_end) =
         row_bounds(position, canonical.broadcast.window_start_shard);
     (

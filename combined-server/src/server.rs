@@ -220,6 +220,7 @@ pub async fn run_with_states_until<NfP: PirEngine + 'static, WitP: PirEngine + '
     .await
 }
 
+#[allow(clippy::type_complexity)]
 async fn run_inner<
     #[cfg(feature = "nullifier")] NfP: PirEngine + 'static,
     #[cfg(feature = "witness")] WitP: PirEngine + 'static,

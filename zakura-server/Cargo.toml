@@ -5,8 +5,7 @@ edition = "2021"
 autobins = false
 
 [dependencies]
-# The custom service API currently lives in the sibling Zakura checkout.
-zakura-network = { path = "../../zakura/crates/zakura-network" }
+zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
 spend-server = { path = "../nullifier/spend-server" }
 witness-server = { path = "../witness/witness-server" }
 pir-types = { path = "../shared/pir-types" }

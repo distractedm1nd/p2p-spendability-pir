@@ -33,8 +33,8 @@ commitment-ingest = { path = "../witness/commitment-ingest", optional = true }
 hashtable-pir = { path = "../nullifier/hashtable-pir", optional = true }
 commitment-tree-db = { path = "../witness/commitment-tree-db", optional = true }
 spendability-pir-zakura = { path = "../zakura-server" }
-zakura = { path = "../../zakura/crates/zakurad", default-features = false }
-zakura-network = { path = "../../zakura/crates/zakura-network" }
+zakura = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services", default-features = false }
+zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
 chain-ingest = { path = "../shared/chain-ingest" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }

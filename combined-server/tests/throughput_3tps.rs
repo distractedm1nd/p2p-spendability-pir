@@ -307,8 +307,8 @@ fn sustained_5tps_15s_blocks() {
 
     // ── Sustained run ────────────────────────────────────────────────
     println!(
-        "\n  {:>5}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
-        "Block", "Ingest", "NF PIR", "Wit PIR", "Total", "Status",
+        "\n  {:>5}  {:>8}  {:>8}  {:>8}  {:>8}  Status",
+        "Block", "Ingest", "NF PIR", "Wit PIR", "Total",
     );
     println!("  {}", "-".repeat(62));
 
@@ -513,8 +513,8 @@ fn bench_scaling_ceiling() {
     );
     println!();
     println!(
-        "  {:>10}  {:>8}  {:>10}  {:>8}  {:>10}  {:>10}  {:>6}  {}",
-        "Coverage", "NF DB", "NF setup", "WIT DB", "WIT setup", "Combined", "Block", "Status",
+        "  {:>10}  {:>8}  {:>10}  {:>8}  {:>10}  {:>10}  {:>6}  Status",
+        "Coverage", "NF DB", "NF setup", "WIT DB", "WIT setup", "Combined", "Block",
     );
     println!("  {}", "-".repeat(90));
 
