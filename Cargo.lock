@@ -1743,10 +1743,11 @@ dependencies = [
 
 [[package]]
 name = "eyre"
-version = "0.6.12"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
+checksum = "c08309dbcc659c5549a24ddb9b27027640641b282ef5768267c7e675558986a3"
 dependencies = [
+ "autocfg",
  "indenter",
  "once_cell",
 ]
@@ -1912,9 +1913,9 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "futures"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88cf1f829d945f548cf8fec32c61b1f202b6d93b45848602fc02af4b12ad218"
+checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -1940,9 +1941,9 @@ dependencies = [
 
 [[package]]
 name = "futures-channel"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "262590f4fe6afeb0bc83be1daa64e52657fe185690a958af7f3ad0e92085c5ae"
+checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -1950,15 +1951,15 @@ dependencies = [
 
 [[package]]
 name = "futures-core"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7"
+checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
 name = "futures-executor"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6754879cc9f2c66f88c6e5c35344bb0bdb0708b0352b1201815667c7eabc7458"
+checksum = "031b47cf1a3c6cc8bc2fc76cd437f521619387907d469316e7c0bc278f1f5432"
 dependencies = [
  "futures-core",
  "futures-task",
@@ -1967,9 +1968,9 @@ dependencies = [
 
 [[package]]
 name = "futures-io"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4577ecaa3c4f96589d473f679a71b596316f6641bc350038b962a5daf0085d7a"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
 
 [[package]]
 name = "futures-lite"
@@ -1986,32 +1987,32 @@ dependencies = [
 
 [[package]]
 name = "futures-macro"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6d3cde68c518367be28956066ddfef33813991b77a55005a69dae04bf3b10b"
+checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "futures-sink"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e34418ac499d6305c2fb5ad0ed2f6ac998c5f8ca209b4510f7f94242c647e307"
+checksum = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
 
 [[package]]
 name = "futures-task"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109"
+checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
 
 [[package]]
 name = "futures-util"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa"
+checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -2107,19 +2108,6 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
-
-[[package]]
-name = "git2"
-version = "0.20.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
-dependencies = [
- "bitflags",
- "libc",
- "libgit2-sys",
- "log",
- "url",
-]
 
 [[package]]
 name = "glob"
@@ -3303,18 +3291,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "libgit2-sys"
-version = "0.18.7+1.9.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23c7391e4b9f4ffab1a624223cc1d7385ff9a678f490768add717de7ea2f4d89"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "pkg-config",
-]
-
-[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3360,7 +3336,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
 dependencies = [
  "cc",
- "libc",
  "pkg-config",
  "vcpkg",
 ]
@@ -6509,6 +6484,7 @@ dependencies = [
  "socket2 0.6.3",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower 0.5.3",
  "tower-layer",
@@ -6975,14 +6951,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "vergen-git2"
+name = "vergen-gitcl"
 version = "9.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d51ab55ddf1188c8d679f349775362b0fa9e90bd7a4ac69838b2a087623f0d57"
+checksum = "77ff3b5300a085d6bcd8fc96a507f706a28ae3814693236c9b409db71a1d15b9"
 dependencies = [
  "anyhow",
  "derive_builder",
- "git2",
  "rustversion",
  "time",
  "vergen",
@@ -7958,7 +7933,7 @@ checksum = "2164e798d9e3d84ee2c91139ace54638059a3b23e361f5c11781c2c6459bde0f"
 
 [[package]]
 name = "zakura"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "abscissa_core",
  "bytes",
@@ -8003,9 +7978,10 @@ dependencies = [
  "tracing-error",
  "tracing-futures",
  "tracing-subscriber",
- "vergen-git2",
+ "vergen-gitcl",
  "zakura-chain",
  "zakura-consensus",
+ "zakura-header-chain",
  "zakura-jsonl-trace",
  "zakura-network",
  "zakura-node-services",
@@ -8017,7 +7993,7 @@ dependencies = [
 
 [[package]]
 name = "zakura-chain"
-version = "4.1.0"
+version = "6.0.0"
 dependencies = [
  "bech32",
  "bitflags",
@@ -8079,7 +8055,7 @@ dependencies = [
 
 [[package]]
 name = "zakura-consensus"
-version = "6.0.0"
+version = "7.0.0"
 dependencies = [
  "bellman",
  "blake2b_simd",
@@ -8106,6 +8082,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "zakura-chain",
+ "zakura-header-chain",
  "zakura-node-services",
  "zakura-script",
  "zakura-state",
@@ -8116,6 +8093,17 @@ dependencies = [
  "zcash_protocol",
  "zcash_script",
  "zcash_transparent",
+]
+
+[[package]]
+name = "zakura-header-chain"
+version = "1.0.0-rc0"
+dependencies = [
+ "chrono",
+ "rayon",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "zakura-chain",
 ]
 
 [[package]]
@@ -8131,7 +8119,7 @@ dependencies = [
 
 [[package]]
 name = "zakura-network"
-version = "6.0.0"
+version = "7.0.0"
 dependencies = [
  "bitflags",
  "blake2b_simd",
@@ -8165,12 +8153,14 @@ dependencies = [
  "tracing-error",
  "tracing-futures",
  "zakura-chain",
+ "zakura-header-chain",
  "zakura-jsonl-trace",
+ "zakura-node-services",
 ]
 
 [[package]]
 name = "zakura-node-services"
-version = "3.1.0"
+version = "3.2.1"
 dependencies = [
  "color-eyre",
  "jsonrpsee-types",
@@ -8180,11 +8170,12 @@ dependencies = [
  "tokio",
  "tower 0.4.13",
  "zakura-chain",
+ "zakura-header-chain",
 ]
 
 [[package]]
 name = "zakura-rpc"
-version = "7.0.0"
+version = "7.0.1"
 dependencies = [
  "base64",
  "chrono",
@@ -8245,7 +8236,7 @@ dependencies = [
 
 [[package]]
 name = "zakura-script"
-version = "3.1.0"
+version = "3.2.1"
 dependencies = [
  "libzcash_script",
  "rand 0.8.5",
@@ -8257,7 +8248,7 @@ dependencies = [
 
 [[package]]
 name = "zakura-state"
-version = "6.1.0"
+version = "7.0.0"
 dependencies = [
  "bincode",
  "chrono",
@@ -8290,6 +8281,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "zakura-chain",
+ "zakura-header-chain",
  "zakura-node-services",
 ]
 

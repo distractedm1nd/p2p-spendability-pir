@@ -135,7 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let service_id = ZakuraServiceId::new(PIR_SERVICE_ID)?;
         let custom_service = CustomService {
             service: p2p_service,
-            advertised_services: vec![service_id],
+            provides: vec![service_id],
+            seeks: Vec::new(),
         };
 
         run_combined_with_zakura(config, nf_state, wit_state, zakura_config, custom_service)

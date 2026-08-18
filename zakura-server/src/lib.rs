@@ -143,15 +143,41 @@ impl TryFrom<u16> for Message {
 }
 
 const FRAME_HEADER_BYTES: usize = 8;
+const FRAME_PAYLOAD_BYTES: usize = LOCAL_MAX_CONTROL_FRAME_BYTES as usize - FRAME_HEADER_BYTES;
+/// Set when another frame continues the current message payload.
+pub const FRAME_FLAG_MORE: u16 = 1;
 const PIR_STREAMS: [Stream; 1] = [Stream {
     kind: PIR_STREAM_KIND,
     version: PIR_STREAM_VERSION,
-    // YPIR query uploads are approximately 600-700 KiB. Zakura currently
-    // applies its 1 MiB custom/control cap to application-defined streams.
     frame_cap: LOCAL_MAX_CONTROL_FRAME_BYTES,
     capability: PIR_CAPABILITY,
     mode: StreamMode::Ordered,
 }];
+
+#[derive(Default)]
+struct FrameDecoder(Option<Frame>);
+
+impl FrameDecoder {
+    fn push(&mut self, mut frame: Frame) -> Result<Option<Frame>, &'static str> {
+        if frame.flags > FRAME_FLAG_MORE {
+            return Err("unsupported request flags");
+        }
+        let more = frame.flags == FRAME_FLAG_MORE;
+        frame.flags = 0;
+        let Some(message) = &mut self.0 else {
+            if more {
+                self.0 = Some(frame);
+                return Ok(None);
+            }
+            return Ok(Some(frame));
+        };
+        if message.message_type != frame.message_type {
+            return Err("message type changed before the final frame");
+        }
+        message.payload.extend(frame.payload);
+        Ok((!more).then(|| self.0.take().expect("message was set")))
+    }
+}
 
 /// Native Zakura frontend for spendability PIR.
 #[derive(Clone)]
@@ -240,11 +266,24 @@ impl P2pPirService {
     }
 
     fn frame(payload: Vec<u8>, msg_type: Message) -> Vec<Frame> {
-        vec![Frame {
-            message_type: msg_type as u16,
-            flags: 0,
-            payload,
-        }]
+        let mut frames: Vec<_> = payload
+            .chunks(FRAME_PAYLOAD_BYTES)
+            .map(|chunk| Frame {
+                message_type: msg_type.into(),
+                flags: FRAME_FLAG_MORE,
+                payload: chunk.to_vec(),
+            })
+            .collect();
+        if frames.is_empty() {
+            frames.push(Frame {
+                message_type: msg_type.into(),
+                flags: 0,
+                payload,
+            });
+        } else {
+            frames.last_mut().expect("frames is not empty").flags = 0;
+        }
+        frames
     }
 
     async fn witness_broadcast(&self) -> Result<Vec<Frame>, P2PError> {
@@ -321,25 +360,11 @@ impl P2pPirService {
 
         let frames = match result {
             Ok(frames) => frames,
-            Err(error) => vec![Frame {
-                message_type: Message::ErrRes.into(),
-                flags: 0,
-                payload: serde_json::to_vec(&error).map_err(SinkReject::local)?,
-            }],
+            Err(error) => Self::frame(
+                serde_json::to_vec(&error).map_err(SinkReject::local)?,
+                Message::ErrRes,
+            ),
         };
-
-        let payload_cap = usize::try_from(PIR_STREAMS[0].frame_cap)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(FRAME_HEADER_BYTES);
-        if let Some(frame) = frames
-            .iter()
-            .find(|frame| frame.payload.len() > payload_cap)
-        {
-            return Err(SinkReject::local(format!(
-                "response payload is {} bytes, exceeding negotiated cap of {payload_cap} bytes",
-                frame.payload.len()
-            )));
-        }
 
         Ok(frames)
     }
@@ -375,6 +400,7 @@ impl Service for P2pPirService {
 
         let service = self.clone();
         tokio::spawn(async move {
+            let mut decoder = FrameDecoder::default();
             'peer: loop {
                 let frame = tokio::select! {
                     _ = service_cancel.cancelled() => break,
@@ -382,6 +408,15 @@ impl Service for P2pPirService {
                         Some(frame) => frame,
                         None => break,
                     },
+                };
+
+                let frame = match decoder.push(frame) {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => continue,
+                    Err(_) => {
+                        connection_cancel.cancel();
+                        break;
+                    }
                 };
 
                 let responses = match service.forward(frame).await {
@@ -417,6 +452,26 @@ impl Service for P2pPirService {
 mod tests {
     use super::*;
     use std::{net::SocketAddr, path::PathBuf};
+
+    #[test]
+    fn oversized_payload_is_framed_and_reassembled() {
+        let payload = vec![42; FRAME_PAYLOAD_BYTES + 13];
+        let frames = P2pPirService::frame(payload.clone(), Message::NullifierQueryReq);
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].flags, FRAME_FLAG_MORE);
+        assert_eq!(frames[1].flags, 0);
+        assert!(frames
+            .iter()
+            .all(|frame| frame.encode(LOCAL_MAX_CONTROL_FRAME_BYTES).is_ok()));
+
+        let mut decoder = FrameDecoder::default();
+        assert!(decoder.push(frames[0].clone()).unwrap().is_none());
+        let decoded = decoder.push(frames[1].clone()).unwrap().unwrap();
+        assert_eq!(decoded.message_type, u16::from(Message::NullifierQueryReq));
+        assert_eq!(decoded.flags, 0);
+        assert_eq!(decoded.payload, payload);
+    }
 
     #[tokio::test]
     async fn health_and_params_are_available_before_pir_setup() {
