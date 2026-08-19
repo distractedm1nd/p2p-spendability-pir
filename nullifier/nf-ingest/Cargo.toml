@@ -4,14 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-spend-types = { path = "../spend-types" }
 chain-ingest = { path = "../../shared/chain-ingest" }
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
-thiserror = "2"
 
 [dev-dependencies]
 hashtable-pir = { path = "../hashtable-pir" }
-rand = "0.8"
+tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
 tokio-stream = "0.1"

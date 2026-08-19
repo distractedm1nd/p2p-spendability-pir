@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use pir_types::ZcashNetwork;
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 use witness_client::WitnessClient;
@@ -7,6 +8,9 @@ use witness_types::{decompose_position, PirWitness};
 #[derive(Parser)]
 #[command(name = "witness-cli", about = "Query a witness PIR server")]
 struct Cli {
+    /// Zcash network served by the endpoint.
+    #[arg(long)]
+    zcash_network: ZcashNetwork,
     /// Base URL for witness-server.
     #[arg(long, default_value = "http://127.0.0.1:8081")]
     server: String,
@@ -21,7 +25,7 @@ enum Command {
     Metadata,
     /// Fetch and verify a note commitment witness through the PIR protocol.
     Witness {
-        /// Absolute Orchard commitment tree position. Defaults to tree_size - 1.
+        /// Absolute Ironwood commitment tree position. Defaults to tree_size - 1.
         #[arg(long)]
         position: Option<u64>,
     },
@@ -56,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Witness { position } => {
             let metadata = fetch_metadata(&server).await?;
             let position = position.unwrap_or_else(|| metadata.tree_size.saturating_sub(1));
-            let witness = WitnessClient::connect(&server)
+            let witness = WitnessClient::connect(&server, cli.zcash_network)
                 .await?
                 .get_witness(position)
                 .await?;

@@ -32,7 +32,7 @@ use orchard::tree::MerkleHashOrchard;
 use witness_types::*;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+const IRONWOOD_PROTOCOL: i32 = 2;
 const BATCH_SIZE: u64 = 10_000;
 const FRONTIER_BLOCKS: u64 = 200;
 
@@ -198,7 +198,7 @@ async fn connect_and_get_subtree_roots() -> (LwdClient, Vec<chain_ingest::proto:
         .expect("failed to connect to lightwalletd");
 
     let roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 256)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 256)
         .await
         .expect("failed to get subtree roots");
 
@@ -232,12 +232,12 @@ async fn ingest_block_range(
         for block in &blocks {
             if block.height == from && tree_size_at_start.is_none() {
                 if let Some(meta) = &block.chain_metadata {
-                    let size_after = meta.orchard_commitment_tree_size as u64;
-                    let cmx_count = extract_commitments(block).len() as u64;
+                    let size_after = meta.ironwood_commitment_tree_size as u64;
+                    let cmx_count = extract_commitments(block).unwrap().len() as u64;
                     tree_size_at_start = Some(size_after.saturating_sub(cmx_count));
                 }
             }
-            all_commitments.extend(extract_commitments(block));
+            all_commitments.extend(extract_commitments(block).unwrap());
         }
 
         current = batch_end + 1;
@@ -249,6 +249,7 @@ async fn ingest_block_range(
 // ── Test 1: shard root verification ────────────────────────────────────
 
 #[tokio::test]
+#[ignore = "requires an Ironwood-capable mainnet lightwalletd"]
 async fn verify_shard_root_against_mainnet() {
     tracing_subscriber::fmt()
         .with_env_filter("info")
@@ -338,6 +339,7 @@ async fn verify_shard_root_against_mainnet() {
 // ── Test 2: witness reconstruction with frontier ───────────────────────
 
 #[tokio::test]
+#[ignore = "requires an Ironwood-capable mainnet lightwalletd"]
 async fn verify_witness_reconstruction() {
     tracing_subscriber::fmt()
         .with_env_filter("info")

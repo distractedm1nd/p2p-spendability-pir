@@ -26,6 +26,7 @@ pub fn reconstruct_witness(
     decoded_row: &[u8],
     broadcast: &BroadcastData,
 ) -> Result<PirWitness> {
+    validate_broadcast(shard_idx, broadcast)?;
     let mut siblings = [[0u8; 32]; TREE_DEPTH];
 
     let leaves = parse_leaves(decoded_row)?;
@@ -145,9 +146,39 @@ fn parse_leaves(decoded_row: &[u8]) -> Result<Vec<Hash>> {
         let start = i * 32;
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&decoded_row[start..start + 32]);
+        if !bool::from(MerkleHashOrchard::from_bytes(&hash).is_some()) {
+            return Err(WitnessClientError::QueryFailed(format!(
+                "decoded row contains a non-canonical commitment at index {i}"
+            )));
+        }
         leaves.push(hash);
     }
     Ok(leaves)
+}
+
+fn validate_broadcast(shard_idx: u32, broadcast: &BroadcastData) -> Result<()> {
+    let offset = shard_idx
+        .checked_sub(broadcast.window_start_shard)
+        .ok_or_else(|| WitnessClientError::InvalidParams("shard precedes PIR window".into()))?
+        as usize;
+    let roots = broadcast
+        .subshard_roots
+        .get(offset)
+        .ok_or_else(|| WitnessClientError::InvalidParams("missing subshard roots".into()))?;
+    if roots.roots.len() != SUBSHARDS_PER_SHARD
+        || broadcast.cap.shard_roots.len() > (1 << SHARD_HEIGHT)
+        || shard_idx as usize >= (1 << SHARD_HEIGHT)
+        || roots
+            .roots
+            .iter()
+            .chain(&broadcast.cap.shard_roots)
+            .any(|root| !bool::from(MerkleHashOrchard::from_bytes(root).is_some()))
+    {
+        return Err(WitnessClientError::InvalidParams(
+            "malformed Ironwood tree broadcast".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

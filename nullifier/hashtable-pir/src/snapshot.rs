@@ -1,9 +1,9 @@
 use crate::{BlockRecord, Bucket, HashTableDb, HashTableError, Result};
-use spend_types::{NullifierEntry, BUCKET_BYTES, BUCKET_CAPACITY, ENTRY_BYTES, NUM_BUCKETS};
+use spend_types::{BUCKET_BYTES, BUCKET_CAPACITY, ENTRY_BYTES, NUM_BUCKETS};
 use std::collections::{BTreeMap, HashMap};
 use xxhash_rust::xxh64::xxh64;
 
-const SNAPSHOT_MAGIC: u64 = 0x5350_454E_4450_4952; // "SPENDPIR"
+const SNAPSHOT_MAGIC: u64 = 0x4952_4F4E_5049_5200; // "IRONPIR\0"
 const SNAPSHOT_VERSION: u32 = 2;
 
 impl HashTableDb {
@@ -13,14 +13,6 @@ impl HashTableDb {
         // Header: magic (8 bytes) + version (4 bytes)
         buf.extend_from_slice(&SNAPSHOT_MAGIC.to_le_bytes());
         buf.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
-        buf.extend_from_slice(&self.latest_height().unwrap_or(0).to_le_bytes());
-
-        let latest_hash = self.latest_block_hash().unwrap_or([0u8; 32]);
-        let latest_hash_height = self.latest_height().unwrap_or(0);
-        buf.extend_from_slice(&latest_hash_height.to_le_bytes());
-        buf.extend_from_slice(&latest_hash);
-
-        buf.extend_from_slice(&(self.num_entries as u64).to_le_bytes());
         buf.extend_from_slice(&(self.block_index.len() as u64).to_le_bytes());
 
         // Block index (ordered by height via BTreeMap iteration)
@@ -35,10 +27,10 @@ impl HashTableDb {
             }
         }
 
-        // Bucket data (41-byte entries)
+        // Bucket data (raw 32-byte Ironwood nullifiers)
         for bucket in &self.buckets {
             for entry in &bucket.entries {
-                buf.extend_from_slice(&entry.to_bytes());
+                buf.extend_from_slice(entry);
             }
         }
 
@@ -50,10 +42,9 @@ impl HashTableDb {
     }
 
     pub fn from_snapshot(data: &[u8]) -> Result<Self> {
-        // magic(8) + version(4) + latest_height(8) + latest_hash_height(8)
-        // + latest_hash(32) + num_entries(8) + num_blocks(8)
+        // magic(8) + version(4) + num_blocks(8)
         // + bucket_data(NUM_BUCKETS * BUCKET_BYTES) + checksum(8)
-        let min_size = 8 + 4 + 8 + 8 + 32 + 8 + 8 + (NUM_BUCKETS * BUCKET_BYTES) + 8;
+        let min_size = 8 + 4 + 8 + (NUM_BUCKETS * BUCKET_BYTES) + 8;
         if data.len() < min_size {
             return Err(HashTableError::Snapshot("data too short".into()));
         }
@@ -108,20 +99,20 @@ impl HashTableDb {
             )));
         }
 
-        let _latest_height = read_u64(&mut pos)?;
-        let _latest_hash_height = read_u64(&mut pos)?;
-        let _latest_hash = read_bytes_32(&mut pos)?;
-        let num_entries = read_u64(&mut pos)? as usize;
         let num_blocks = read_u64(&mut pos)? as usize;
 
         // Block index
         let mut block_index = BTreeMap::new();
         let mut block_hash_to_height = HashMap::new();
+        let mut num_entries = 0usize;
 
         for _ in 0..num_blocks {
             let height = read_u64(&mut pos)?;
             let block_hash = read_bytes_32(&mut pos)?;
             let num_slots = read_u32(&mut pos)? as usize;
+            num_entries = num_entries
+                .checked_add(num_slots)
+                .ok_or_else(|| HashTableError::Snapshot("nullifier count overflow".into()))?;
 
             let mut slots = Vec::with_capacity(num_slots);
             for _ in 0..num_slots {
@@ -138,7 +129,7 @@ impl HashTableDb {
             block_index.insert(height, BlockRecord { block_hash, slots });
         }
 
-        // Bucket data (41-byte entries)
+        // Bucket data (raw 32-byte Ironwood nullifiers)
         let bucket_data_start = pos;
         let bucket_data_end = bucket_data_start + NUM_BUCKETS * BUCKET_BYTES;
         if bucket_data_end > payload.len() {
@@ -151,18 +142,10 @@ impl HashTableDb {
             let mut bucket = Bucket::new();
             for j in 0..BUCKET_CAPACITY {
                 let entry_start = offset + j * ENTRY_BYTES;
-                let entry_slice: [u8; ENTRY_BYTES] = payload
-                    [entry_start..entry_start + ENTRY_BYTES]
+                let entry: [u8; ENTRY_BYTES] = payload[entry_start..entry_start + ENTRY_BYTES]
                     .try_into()
                     .unwrap();
-                bucket.entries[j] = NullifierEntry::from_bytes(entry_slice);
-            }
-            bucket.count = 0;
-            for j in (0..BUCKET_CAPACITY).rev() {
-                if !bucket.entries[j].is_empty() {
-                    bucket.count = (j + 1) as u8;
-                    break;
-                }
+                bucket.entries[j] = entry;
             }
             buckets.push(bucket);
         }

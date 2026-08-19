@@ -39,7 +39,7 @@ use ypir::params::params_for_scenario_simplepir;
 use ypir::serialize::ToBytes;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+const IRONWOOD_PROTOCOL: i32 = 2;
 const TEST_WINDOW_SHARD_LIMIT: usize = 2;
 
 /// Canonical oracle data built directly from lightwalletd.
@@ -122,11 +122,11 @@ fn reference_leaf_at_position(tree: &CommitmentTreeDb, position: u64) -> Hash {
 /// This mirrors the production bootstrap behavior that must include those
 /// leaves before continuing the forward sync.
 fn canonical_window_spillover(block: &CompactBlock, leaf_offset: u64) -> Vec<Hash> {
-    let commitments = extract_commitments(block);
+    let commitments = extract_commitments(block).unwrap();
     let end_tree_size = block
         .chain_metadata
         .as_ref()
-        .map(|meta| meta.orchard_commitment_tree_size as u64)
+        .map(|meta| meta.ironwood_commitment_tree_size as u64)
         .unwrap_or(0);
 
     if end_tree_size <= leaf_offset {
@@ -140,7 +140,7 @@ fn canonical_window_spillover(block: &CompactBlock, leaf_offset: u64) -> Vec<Has
 
 /// Appends all Orchard commitments from a compact block into the reference tree.
 fn append_block(tree: &mut CommitmentTreeDb, block: &CompactBlock) {
-    let commitments = extract_commitments(block);
+    let commitments = extract_commitments(block).unwrap();
     tree.append_commitments(block.height, copy_hash(&block.hash), &commitments);
 }
 
@@ -159,7 +159,7 @@ async fn build_canonical_reference(
         .expect("failed to connect to lightwalletd for canonical reference");
 
     let subtree_roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
         .await
         .expect("failed to fetch subtree roots for canonical reference");
 
@@ -300,6 +300,7 @@ fn reference_decoded_row(canonical: &CanonicalReference, position: u64) -> (&[u8
 }
 
 #[tokio::test]
+#[ignore = "requires an Ironwood-capable mainnet lightwalletd and full YPIR"]
 async fn full_pir_round_trip() {
     tracing_subscriber::fmt()
         .with_env_filter("info")
@@ -310,6 +311,7 @@ async fn full_pir_round_trip() {
     let (dir, _tmp_guard) = data_dir();
 
     let config = ServerConfig {
+        zcash_network: pir_types::ZcashNetwork::Main,
         snapshot_interval: 0,
         data_dir: dir,
         lwd_urls: vec![LWD_ENDPOINT.to_string()],
@@ -360,7 +362,7 @@ async fn full_pir_round_trip() {
     let base_url = format!("http://{addr}");
     tracing::info!(url = %base_url, "server listening");
 
-    let client = WitnessClient::connect(&base_url)
+    let client = WitnessClient::connect(&base_url, pir_types::ZcashNetwork::Main)
         .await
         .expect("WitnessClient::connect failed");
 

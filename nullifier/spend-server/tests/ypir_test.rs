@@ -26,13 +26,7 @@ fn build_db_with_nf(nf: &[u8; 32]) -> Vec<u8> {
     let mut db = vec![0u8; NUM_BUCKETS * BUCKET_BYTES];
     let bucket_idx = hash_to_bucket(nf) as usize;
     let offset = bucket_idx * BUCKET_BYTES;
-    let entry = spend_types::NullifierEntry {
-        nullifier: *nf,
-        spend_height: 1,
-        first_output_position: 0,
-        action_count: 1,
-    };
-    db[offset..offset + ENTRY_BYTES].copy_from_slice(&entry.to_bytes());
+    db[offset..offset + ENTRY_BYTES].copy_from_slice(nf);
     db
 }
 
@@ -105,15 +99,7 @@ fn test_ypir_with_hashtable() {
 
     let mut db = hashtable_pir::HashTableDb::new();
     let nfs: Vec<[u8; 32]> = (100..110).map(make_nf).collect();
-    let nwms: Vec<spend_types::NullifierWithMeta> = nfs
-        .iter()
-        .map(|nf| spend_types::NullifierWithMeta {
-            nullifier: *nf,
-            first_output_position: 0,
-            action_count: 1,
-        })
-        .collect();
-    db.insert_block(1, [1u8; 32], &nwms).unwrap();
+    db.insert_block(1, [1u8; 32], &nfs).unwrap();
 
     let pir_bytes = db.to_pir_bytes();
     let state = engine.setup(&pir_bytes, &sc).unwrap();

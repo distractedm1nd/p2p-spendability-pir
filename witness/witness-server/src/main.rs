@@ -1,5 +1,5 @@
 use clap::Parser;
-use pir_types::YpirScenario;
+use pir_types::{YpirScenario, ZcashNetwork};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +14,10 @@ use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
     about = "Private note commitment witness server"
 )]
 struct Cli {
+    /// Zcash network to ingest.
+    #[arg(long)]
+    zcash_network: ZcashNetwork,
+
     /// Directory for snapshots
     #[arg(long, default_value = "./data")]
     data_dir: PathBuf,
@@ -48,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&cli.data_dir)?;
 
     let config = ServerConfig {
+        zcash_network: cli.zcash_network,
         snapshot_interval: cli.snapshot_interval,
         data_dir: cli.data_dir,
         lwd_urls: cli.lwd_url,

@@ -1,32 +1,21 @@
-use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use chain_ingest::{ChainAction, ChainTracker, LwdClient};
-use pir_types::{PirEngine, ServerPhase, CONFIRMATION_DEPTH};
-use serde::Serialize;
+use chain_ingest::{BlockEvent, LwdClient, PipelineError, ValidatedBlock};
+use commitment_tree_db::CommitmentTreeDb;
+use hashtable_pir::HashTableDb;
+use pir_types::{PirEngine, ServerPhase, ZcashNetwork, CONFIRMATION_DEPTH};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-#[cfg(all(feature = "nullifier", feature = "witness"))]
-use hashtable_pir::HashTableDb;
-#[cfg(feature = "nullifier")]
-use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
-
-#[cfg(all(feature = "nullifier", feature = "witness"))]
-use commitment_tree_db::CommitmentTreeDb;
-#[cfg(feature = "witness")]
-use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
 const FOLLOW_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct CombinedConfig {
-    #[cfg(feature = "nullifier")]
+    pub zcash_network: ZcashNetwork,
     pub target_size: usize,
     pub snapshot_interval: u64,
     pub data_dir: PathBuf,
@@ -36,105 +25,36 @@ pub struct CombinedConfig {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
-    #[cfg(feature = "nullifier")]
     #[error("nullifier server error: {0}")]
     Nullifier(#[from] spend_server::server::ServerError),
-    #[cfg(feature = "witness")]
     #[error("witness server error: {0}")]
     Witness(#[from] witness_server::server::ServerError),
     #[error("chain client error: {0}")]
     Client(#[from] chain_ingest::ClientError),
-    #[cfg(feature = "nullifier")]
+    #[error("chain pipeline error: {0}")]
+    Pipeline(#[from] chain_ingest::PipelineError),
+    #[error("chain task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Ironwood(#[from] chain_ingest::IronwoodError),
+    #[error(transparent)]
+    IronwoodEndpoint(#[from] chain_ingest::EndpointError),
+    #[error(transparent)]
+    Dataset(#[from] chain_ingest::DatasetError),
     #[error("hashtable error: {0}")]
     HashTable(#[from] hashtable_pir::HashTableError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("nullifier and witness stores ended shared sync at different chain tips")]
+    SubsystemTipMismatch,
 }
 
 pub type Result<T> = std::result::Result<T, ServerError>;
 
-struct CombinedHealthState {
-    #[cfg(feature = "nullifier")]
-    nf_phase: Arc<arc_swap::ArcSwap<ServerPhase>>,
-    #[cfg(feature = "witness")]
-    wit_phase: Arc<arc_swap::ArcSwap<ServerPhase>>,
+async fn combined_health() -> StatusCode {
+    StatusCode::OK
 }
 
-#[derive(Serialize)]
-struct CombinedHealthResponse {
-    #[cfg(feature = "nullifier")]
-    nullifier: SubsystemHealth,
-    #[cfg(feature = "witness")]
-    witness: SubsystemHealth,
-}
-
-#[derive(Serialize)]
-struct SubsystemHealth {
-    phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_height: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_height: Option<u64>,
-}
-
-fn phase_to_health(phase: &ServerPhase) -> SubsystemHealth {
-    match phase {
-        ServerPhase::Serving => SubsystemHealth {
-            phase: "serving".into(),
-            current_height: None,
-            target_height: None,
-        },
-        ServerPhase::Syncing {
-            current_height,
-            target_height,
-        } => SubsystemHealth {
-            phase: "syncing".into(),
-            current_height: Some(*current_height),
-            target_height: Some(*target_height),
-        },
-    }
-}
-
-async fn combined_health(State(state): State<Arc<CombinedHealthState>>) -> impl IntoResponse {
-    #[allow(unused_mut)]
-    let mut all_serving = true;
-
-    #[cfg(feature = "nullifier")]
-    let nf_health = {
-        let nf_phase = state.nf_phase.load();
-        if !matches!(nf_phase.as_ref(), ServerPhase::Serving) {
-            all_serving = false;
-        }
-        phase_to_health(&nf_phase)
-    };
-
-    #[cfg(feature = "witness")]
-    let wit_health = {
-        let wit_phase = state.wit_phase.load();
-        if !matches!(wit_phase.as_ref(), ServerPhase::Serving) {
-            all_serving = false;
-        }
-        phase_to_health(&wit_phase)
-    };
-
-    let body = CombinedHealthResponse {
-        #[cfg(feature = "nullifier")]
-        nullifier: nf_health,
-        #[cfg(feature = "witness")]
-        witness: wit_health,
-    };
-
-    let status = if all_serving {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-
-    (status, axum::Json(body))
-}
-
-/// Create both application states before starting sync or any frontend.
-#[cfg(all(feature = "nullifier", feature = "witness"))]
 pub fn create_app_states<NfP: PirEngine, WitP: PirEngine>(
     config: &CombinedConfig,
     nf_engine: Arc<NfP>,
@@ -145,6 +65,7 @@ pub fn create_app_states<NfP: PirEngine, WitP: PirEngine>(
 ) {
     let nullifier = Arc::new(spend_server::state::AppState::new(
         spend_server::state::ServerConfig {
+            zcash_network: config.zcash_network,
             target_size: config.target_size,
             confirmation_depth: CONFIRMATION_DEPTH,
             snapshot_interval: config.snapshot_interval,
@@ -156,6 +77,7 @@ pub fn create_app_states<NfP: PirEngine, WitP: PirEngine>(
     ));
     let witness = Arc::new(witness_server::state::AppState::new(
         witness_server::state::ServerConfig {
+            zcash_network: config.zcash_network,
             snapshot_interval: config.snapshot_interval,
             data_dir: config.data_dir.join("witness"),
             lwd_urls: config.lwd_urls.clone(),
@@ -164,453 +86,376 @@ pub fn create_app_states<NfP: PirEngine, WitP: PirEngine>(
         },
         wit_engine,
     ));
-
     (nullifier, witness)
 }
 
-/// Main entry point for the combined PIR server.
-pub async fn run<
-    #[cfg(feature = "nullifier")] NfP: PirEngine + 'static,
-    #[cfg(feature = "witness")] WitP: PirEngine + 'static,
->(
-    config: CombinedConfig,
-    #[cfg(feature = "nullifier")] nf_engine: Arc<NfP>,
-    #[cfg(feature = "witness")] wit_engine: Arc<WitP>,
-) -> Result<()> {
-    run_inner(
-        config,
-        #[cfg(feature = "nullifier")]
-        nf_engine,
-        #[cfg(feature = "witness")]
-        wit_engine,
-        #[cfg(all(feature = "nullifier", feature = "witness"))]
-        None,
-        CancellationToken::new(),
-    )
-    .await
-}
-
-#[cfg(all(feature = "nullifier", feature = "witness"))]
-pub async fn run_with_states<NfP: PirEngine + 'static, WitP: PirEngine + 'static>(
-    config: CombinedConfig,
-    nf_state: Arc<spend_server::state::AppState<NfP>>,
-    wit_state: Arc<witness_server::state::AppState<WitP>>,
-) -> Result<()> {
-    run_with_states_until(config, nf_state, wit_state, CancellationToken::new()).await
-}
-
-/// Run the complete combined lifecycle using caller-created states until
-/// `shutdown` is cancelled.
-#[cfg(all(feature = "nullifier", feature = "witness"))]
 pub async fn run_with_states_until<NfP: PirEngine + 'static, WitP: PirEngine + 'static>(
     config: CombinedConfig,
     nf_state: Arc<spend_server::state::AppState<NfP>>,
     wit_state: Arc<witness_server::state::AppState<WitP>>,
     shutdown: CancellationToken,
 ) -> Result<()> {
-    let nf_engine = nf_state.engine.clone();
-    let wit_engine = wit_state.engine.clone();
-    run_inner(
-        config,
-        nf_engine,
-        wit_engine,
-        Some((nf_state, wit_state)),
-        shutdown,
-    )
-    .await
-}
-
-#[allow(clippy::type_complexity)]
-async fn run_inner<
-    #[cfg(feature = "nullifier")] NfP: PirEngine + 'static,
-    #[cfg(feature = "witness")] WitP: PirEngine + 'static,
->(
-    config: CombinedConfig,
-    #[cfg(feature = "nullifier")] nf_engine: Arc<NfP>,
-    #[cfg(feature = "witness")] wit_engine: Arc<WitP>,
-    #[cfg(all(feature = "nullifier", feature = "witness"))] provided_states: Option<(
-        Arc<spend_server::state::AppState<NfP>>,
-        Arc<witness_server::state::AppState<WitP>>,
-    )>,
-    shutdown: CancellationToken,
-) -> Result<()> {
-    #[cfg(feature = "nullifier")]
-    let nf_config = spend_server::state::ServerConfig {
-        target_size: config.target_size,
-        confirmation_depth: CONFIRMATION_DEPTH,
-        snapshot_interval: config.snapshot_interval,
-        data_dir: config.data_dir.join("nullifier"),
-        lwd_urls: config.lwd_urls.clone(),
-        listen_addr: config.listen_addr,
-    };
-    #[cfg(feature = "witness")]
-    let wit_config = witness_server::state::ServerConfig {
-        snapshot_interval: config.snapshot_interval,
-        data_dir: config.data_dir.join("witness"),
-        lwd_urls: config.lwd_urls.clone(),
-        listen_addr: config.listen_addr,
-        window_shard_limit: witness_server::state::DEFAULT_WINDOW_SHARD_LIMIT,
-    };
-
-    tracing::info!("starting sync for enabled subsystems");
-
     if shutdown.is_cancelled() {
         return Ok(());
     }
 
-    #[cfg(all(feature = "nullifier", feature = "witness"))]
-    let ((nf_state, mut hashtable), (wit_state, mut tree)) =
-        if let Some((nf_state, wit_state)) = provided_states {
-            let sync = async {
-                tokio::join!(
-                    spend_server::server::sync_into(nf_state.clone()),
-                    witness_server::server::sync_into(wit_state.clone()),
-                )
-            };
-            let (nf_result, wit_result) = tokio::select! {
-                _ = shutdown.cancelled() => return Ok(()),
-                results = sync => results,
-            };
-            (
-                (nf_state, nf_result.map_err(ServerError::Nullifier)?),
-                (wit_state, wit_result.map_err(ServerError::Witness)?),
-            )
-        } else {
-            let sync = async {
-                tokio::join!(
-                    spend_server::server::run_sync_only(nf_config, nf_engine.clone()),
-                    witness_server::server::run_sync_only(wit_config, wit_engine.clone()),
-                )
-            };
-            let (nf_result, wit_result) = tokio::select! {
-                _ = shutdown.cancelled() => return Ok(()),
-                results = sync => results,
-            };
-            (
-                nf_result.map_err(ServerError::Nullifier)?,
-                wit_result.map_err(ServerError::Witness)?,
-            )
-        };
-
-    #[cfg(all(feature = "nullifier", not(feature = "witness")))]
-    let (nf_state, mut hashtable) = tokio::select! {
+    let (mut hashtable, mut tree) = tokio::select! {
         _ = shutdown.cancelled() => return Ok(()),
-        result = spend_server::server::run_sync_only(nf_config, nf_engine.clone()) => {
-            result.map_err(ServerError::Nullifier)?
-        }
+        result = sync_both(&config, &nf_state, &wit_state) => result?,
     };
 
-    #[cfg(all(feature = "witness", not(feature = "nullifier")))]
-    let (wit_state, mut tree) = tokio::select! {
-        _ = shutdown.cancelled() => return Ok(()),
-        result = witness_server::server::run_sync_only(wit_config, wit_engine.clone()) => {
-            result.map_err(ServerError::Witness)?
-        }
-    };
-
-    tracing::info!("sync complete, building router");
-
-    // --- Build router ---
-
-    let health_state = Arc::new(CombinedHealthState {
-        #[cfg(feature = "nullifier")]
-        nf_phase: Arc::new(arc_swap::ArcSwap::from_pointee(ServerPhase::Serving)),
-        #[cfg(feature = "witness")]
-        wit_phase: Arc::new(arc_swap::ArcSwap::from_pointee(ServerPhase::Serving)),
-    });
-
-    #[allow(unused_mut)]
-    let mut router = Router::new()
-        .route("/health", get(combined_health))
-        .with_state(health_state);
-
-    #[cfg(feature = "nullifier")]
+    let follow_height = hashtable.latest_height().unwrap_or(0);
+    if tree.latest_height() != Some(follow_height)
+        || tree.latest_block_hash() != hashtable.latest_block_hash()
     {
-        router = router.nest(
+        return Err(ServerError::SubsystemTipMismatch);
+    }
+    let follow_hash = hashtable.latest_block_hash().unwrap_or([0; 32]);
+
+    let router = Router::new()
+        .route("/health", get(combined_health))
+        .nest(
             "/nullifier",
             spend_server::server::build_router(nf_state.clone()),
-        );
-    }
-
-    #[cfg(feature = "witness")]
-    {
-        router = router.nest(
+        )
+        .nest(
             "/witness",
             witness_server::server::build_router(wit_state.clone()),
         );
-    }
-
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!(listen = %config.listen_addr, "http server started");
     let http_handle = tokio::spawn(async move {
         axum::serve(listener, router).await.ok();
     });
 
-    // --- Follow loop ---
-
-    // Determine the starting height from whichever subsystem(s) are enabled.
-    // Determine the starting height/hash from whichever subsystem(s) are enabled.
-    // When both are enabled, catch up the one that's behind first.
-    #[cfg(all(feature = "nullifier", feature = "witness"))]
-    let (follow_height, follow_hash) = {
-        let nf_latest = hashtable.latest_height().unwrap_or(0);
-        let wit_latest = tree.latest_height().unwrap_or(0);
-        match nf_latest.cmp(&wit_latest) {
-            std::cmp::Ordering::Less => {
-                tracing::info!(
-                    from = nf_latest + 1,
-                    to = wit_latest,
-                    "catching up nullifier subsystem"
-                );
-                catch_up_nullifier(&config.lwd_urls, nf_latest + 1, wit_latest, &mut hashtable)
-                    .await?;
-            }
-            std::cmp::Ordering::Greater => {
-                tracing::info!(from = wit_latest + 1, to = nf_latest, "catching up witness");
-                let ts = if tree.tree_size() > 0 {
-                    Some(tree.tree_size() as u32)
-                } else {
-                    None
-                };
-                catch_up_witness(&config.lwd_urls, wit_latest + 1, nf_latest, &mut tree, ts)
-                    .await?;
-            }
-            std::cmp::Ordering::Equal => {}
-        }
-        let h = hashtable.latest_height().unwrap_or(0);
-        let hash = hashtable.latest_block_hash().unwrap_or([0u8; 32]);
-        (h, hash)
-    };
-
-    #[cfg(all(feature = "nullifier", not(feature = "witness")))]
-    let (follow_height, follow_hash) = {
-        let h = hashtable.latest_height().unwrap_or(0);
-        let hash = hashtable.latest_block_hash().unwrap_or([0u8; 32]);
-        (h, hash)
-    };
-
-    #[cfg(all(feature = "witness", not(feature = "nullifier")))]
-    let (follow_height, follow_hash) = {
-        let h = tree.latest_height().unwrap_or(0);
-        (h, [0u8; 32])
-    };
-
-    tracing::info!(height = follow_height, "entering follow mode");
-
-    #[cfg(feature = "nullifier")]
-    let nf_scenario = pir_types::YpirScenario {
-        num_items: NUM_BUCKETS as u64,
-        item_size_bits: (BUCKET_BYTES * 8) as u64,
-    };
-
-    #[cfg(feature = "witness")]
-    let wit_scenario = pir_types::YpirScenario {
-        num_items: L0_DB_ROWS as u64,
-        item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
-    };
+    tracing::info!(height = follow_height, "entering shared follow mode");
 
     let mut client = LwdClient::connect(&config.lwd_urls).await?;
-    let mut tracker =
-        ChainTracker::with_tip(follow_height, follow_hash, CONFIRMATION_DEPTH as usize * 2);
-    let mut current_height = follow_height;
-    let mut blocks_since_snapshot: u64 = 0;
-    #[cfg(feature = "nullifier")]
-    let mut nf_prev_tree_size: Option<u32> = None;
+    chain_ingest::require_ironwood_tree_state(&mut client, config.zcash_network, follow_height)
+        .await?;
+    let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(100);
+    let follow_handle = tokio::spawn(async move {
+        chain_ingest::follow_blocks(
+            &mut client,
+            follow_height,
+            follow_hash,
+            CONFIRMATION_DEPTH,
+            CONFIRMATION_DEPTH as usize * 2,
+            FOLLOW_POLL_INTERVAL,
+            |event| {
+                let tx = block_tx.clone();
+                async move {
+                    tx.send(event)
+                        .await
+                        .map_err(|_| PipelineError::ConsumerDropped)
+                }
+            },
+        )
+        .await
+    });
 
+    let mut blocks_since_snapshot = 0;
     loop {
-        let latest_block = tokio::select! {
+        let event = tokio::select! {
             _ = shutdown.cancelled() => break,
-            latest_block = client.get_latest_block() => latest_block?,
+            event = block_rx.recv() => match event {
+                Some(event) => event,
+                None => {
+                    follow_handle.await??;
+                    return Ok(());
+                }
+            },
         };
-        let (tip_height, _) = latest_block;
 
-        if tip_height <= current_height {
-            tokio::select! {
-                _ = shutdown.cancelled() => break,
-                _ = sleep(FOLLOW_POLL_INTERVAL) => {}
+        match event {
+            BlockEvent::Reorg { rollback_to } => {
+                while hashtable
+                    .latest_height()
+                    .is_some_and(|height| height > rollback_to)
+                {
+                    hashtable.rollback_block(&hashtable.latest_block_hash().unwrap())?;
+                }
+                tree.rollback_to(rollback_to);
+                tracing::info!(rollback_to, "reorg rolled back");
             }
-            continue;
-        }
-
-        let blocks = client
-            .get_block_range(current_height + 1, tip_height)
-            .await?;
-
-        for block in &blocks {
-            let height = block.height;
-            let hash = to_hash_array(&block.hash);
-            let prev_hash = to_hash_array(&block.prev_hash);
-
-            #[cfg(feature = "nullifier")]
-            let (nullifiers, nf_this_tree_size) =
-                nf_ingest::extract_nullifiers_with_meta(block, nf_prev_tree_size);
-            #[cfg(feature = "witness")]
-            let commitments = commitment_ingest::extract_commitments(block);
-
-            match tracker.push_block(height, hash, prev_hash) {
-                ChainAction::Extend => {
-                    #[cfg(feature = "nullifier")]
-                    {
-                        if let Err(e) = hashtable.insert_block(height, hash, &nullifiers) {
-                            tracing::warn!(height, error = %e, "nullifier insert failed");
-                        }
-                        hashtable.evict_to_target();
-                        nf_prev_tree_size = nf_this_tree_size;
-                    }
-
-                    #[cfg(feature = "witness")]
-                    {
-                        tree.append_commitments(height, hash, &commitments);
-                    }
-
-                    current_height = height;
-                    blocks_since_snapshot += 1;
-
-                    #[cfg(all(feature = "nullifier", feature = "witness"))]
-                    tracing::info!(
-                        height,
-                        nfs = nullifiers.len(),
-                        cmx = commitments.len(),
-                        tree_size = tree.tree_size(),
-                        "new block"
-                    );
-                    #[cfg(all(feature = "nullifier", not(feature = "witness")))]
-                    tracing::info!(height, nfs = nullifiers.len(), "new block");
-                    #[cfg(all(feature = "witness", not(feature = "nullifier")))]
-                    tracing::info!(
-                        height,
-                        cmx = commitments.len(),
-                        tree_size = tree.tree_size(),
-                        "new block"
-                    );
-                }
-                ChainAction::Reorg { rollback_to } => {
-                    #[cfg(feature = "nullifier")]
-                    {
-                        while hashtable.latest_height().is_some_and(|h| h > rollback_to) {
-                            if let Some(bh) = hashtable.latest_block_hash() {
-                                if let Err(e) = hashtable.rollback_block(&bh) {
-                                    tracing::warn!(error = %e, "nullifier rollback failed");
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                        if let Err(e) = hashtable.insert_block(height, hash, &nullifiers) {
-                            tracing::warn!(height, error = %e, "nullifier insert after reorg failed");
-                        }
-                        nf_prev_tree_size = nf_this_tree_size;
-                    }
-
-                    #[cfg(feature = "witness")]
-                    {
-                        tree.rollback_to(rollback_to);
-                        tree.append_commitments(height, hash, &commitments);
-                    }
-
-                    current_height = height;
-                    blocks_since_snapshot += 1;
-                    #[cfg(feature = "witness")]
-                    tracing::info!(
-                        rollback_to,
-                        new_height = height,
-                        tree_size = tree.tree_size(),
-                        "reorg handled"
-                    );
-                    #[cfg(not(feature = "witness"))]
-                    tracing::info!(rollback_to, new_height = height, "reorg handled");
-                }
+            BlockEvent::NewBlock(block) => {
+                let (nullifiers, commitments) = apply_block(
+                    &block,
+                    Some(&mut hashtable),
+                    Some(&mut tree),
+                    "combined follow",
+                )?;
+                evict_to_size(&mut hashtable, config.target_size);
+                blocks_since_snapshot += 1;
+                tracing::info!(
+                    height = block.height(),
+                    nfs = nullifiers,
+                    cmx = commitments,
+                    tree_size = tree.tree_size(),
+                    "new confirmed block"
+                );
             }
         }
 
-        // Rebuild PIR databases
-        #[cfg(feature = "nullifier")]
-        {
-            let nf_pir = spend_server::server::rebuild_pir(&*nf_engine, &hashtable, &nf_scenario)
-                .map_err(ServerError::Nullifier)?;
-            nf_state.live_pir.store(Arc::new(Some(nf_pir)));
-        }
-
-        #[cfg(feature = "witness")]
-        {
-            let anchor_height = tree.latest_height().unwrap_or(0);
-            let wit_pir = witness_server::server::rebuild_pir(
-                &*wit_engine,
-                &mut tree,
-                &wit_scenario,
-                anchor_height,
-            )
-            .map_err(ServerError::Witness)?;
-            wit_state.live_pir.store(Arc::new(Some(wit_pir)));
-        }
-
-        // Periodic snapshots
+        rebuild_both(&config, &nf_state, &wit_state, &hashtable, &mut tree)?;
         if blocks_since_snapshot >= config.snapshot_interval {
-            #[cfg(feature = "nullifier")]
-            {
-                let nf_data_dir = config.data_dir.join("nullifier");
-                spend_server::snapshot_io::save_snapshot(&hashtable, &nf_data_dir)
-                    .await
-                    .map_err(spend_server::server::ServerError::from)
-                    .map_err(ServerError::Nullifier)?;
-            }
-            #[cfg(feature = "witness")]
-            {
-                let wit_data_dir = config.data_dir.join("witness");
-                witness_server::snapshot_io::save_snapshot(&tree, &wit_data_dir)
-                    .await
-                    .map_err(witness_server::server::ServerError::from)
-                    .map_err(ServerError::Witness)?;
-            }
+            save_both(&config, &hashtable, &tree).await?;
             blocks_since_snapshot = 0;
             tracing::info!("periodic snapshots saved");
         }
-
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            _ = sleep(FOLLOW_POLL_INTERVAL) => {}
-        }
     }
 
-    tracing::info!("stopping combined PIR server");
+    follow_handle.abort();
     http_handle.abort();
     Ok(())
 }
 
-#[cfg(all(feature = "nullifier", feature = "witness"))]
-async fn catch_up_nullifier(
-    lwd_urls: &[String],
-    from: u64,
-    to: u64,
-    hashtable: &mut HashTableDb,
-) -> Result<()> {
-    let phase = arc_swap::ArcSwap::from_pointee(ServerPhase::Serving);
-    spend_server::server::sync_range(lwd_urls, from, to, hashtable, None, &phase)
-        .await
-        .map_err(ServerError::Nullifier)?;
-    hashtable.evict_to_target();
-    Ok(())
+async fn sync_both<NfP: PirEngine, WitP: PirEngine>(
+    config: &CombinedConfig,
+    nf_state: &Arc<spend_server::state::AppState<NfP>>,
+    wit_state: &Arc<witness_server::state::AppState<WitP>>,
+) -> Result<(HashTableDb, CommitmentTreeDb)> {
+    let nf_dir = config.data_dir.join("nullifier");
+    let wit_dir = config.data_dir.join("witness");
+    chain_ingest::ensure_ironwood_dataset(
+        &nf_dir,
+        config.zcash_network,
+        &["snapshot.bin", "snapshot.bin.tmp"],
+    )?;
+    chain_ingest::ensure_ironwood_dataset(
+        &wit_dir,
+        config.zcash_network,
+        &["witness_snapshot.bin", "witness_snapshot.bin.tmp"],
+    )?;
+
+    let mut client = LwdClient::connect(&config.lwd_urls).await?;
+    let (tip_height, _) = client.get_latest_block().await?;
+    let target_height = tip_height.saturating_sub(CONFIRMATION_DEPTH);
+    chain_ingest::require_ironwood_tree_state(&mut client, config.zcash_network, target_height)
+        .await?;
+
+    let mut hashtable = match spend_server::snapshot_io::load_snapshot(&nf_dir).await {
+        Ok(db) => db,
+        Err(spend_server::snapshot_io::SnapshotIoError::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            HashTableDb::new()
+        }
+        Err(error) => return Err(spend_server::server::ServerError::from(error).into()),
+    };
+    let nf_from = hashtable
+        .latest_height()
+        .map(|height| height + 1)
+        .unwrap_or_else(|| chain_ingest::nu6_3_activation_height(config.zcash_network));
+
+    let (mut tree, wit_from) = match witness_server::snapshot_io::load_snapshot(&wit_dir).await {
+        Ok(tree) => {
+            let from = tree
+                .latest_height()
+                .map(|height| height + 1)
+                .unwrap_or_else(|| chain_ingest::nu6_3_activation_height(config.zcash_network));
+            (tree, from)
+        }
+        Err(witness_server::snapshot_io::SnapshotIoError::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            witness_server::server::prepare_tree(
+                &mut client,
+                target_height,
+                wit_state.config.effective_window_shard_limit(),
+                config.zcash_network,
+            )
+            .await?
+        }
+        Err(error) => return Err(witness_server::server::ServerError::from(error).into()),
+    };
+
+    let sync_from = nf_from.min(wit_from);
+    if sync_from <= target_height {
+        nf_state.phase.store(Arc::new(ServerPhase::Syncing {
+            current_height: sync_from,
+            target_height,
+        }));
+        wit_state.phase.store(Arc::new(ServerPhase::Syncing {
+            current_height: sync_from,
+            target_height,
+        }));
+        tracing::info!(
+            from = sync_from,
+            to = target_height,
+            nullifier_from = nf_from,
+            witness_from = wit_from,
+            "starting shared historical sync"
+        );
+
+        chain_ingest::sync_blocks(&mut client, sync_from, target_height, |block| {
+            let result: Result<()> = (|| {
+                apply_block(
+                    &block,
+                    (block.height() >= nf_from).then_some(&mut hashtable),
+                    (block.height() >= wit_from).then_some(&mut tree),
+                    "combined historical sync",
+                )?;
+                evict_to_size(&mut hashtable, config.target_size);
+                if block.height() % 1000 == 0 {
+                    let phase = Arc::new(ServerPhase::Syncing {
+                        current_height: block.height(),
+                        target_height,
+                    });
+                    nf_state.phase.store(phase.clone());
+                    wit_state.phase.store(phase);
+                    tracing::info!(
+                        height = block.height(),
+                        nullifiers = hashtable.len(),
+                        tree_size = tree.tree_size(),
+                        "shared sync progress"
+                    );
+                }
+                Ok(())
+            })();
+            std::future::ready(result)
+        })
+        .await?;
+    }
+
+    evict_to_size(&mut hashtable, config.target_size);
+    rebuild_both(config, nf_state, wit_state, &hashtable, &mut tree)?;
+    save_both(config, &hashtable, &tree).await?;
+    nf_state.phase.store(Arc::new(ServerPhase::Serving));
+    wit_state.phase.store(Arc::new(ServerPhase::Serving));
+    tracing::info!(height = tree.latest_height(), "shared sync complete");
+    Ok((hashtable, tree))
 }
 
-#[cfg(all(feature = "nullifier", feature = "witness"))]
-async fn catch_up_witness(
-    lwd_urls: &[String],
-    from: u64,
-    to: u64,
+fn apply_block(
+    block: &ValidatedBlock,
+    mut hashtable: Option<&mut HashTableDb>,
+    mut tree: Option<&mut CommitmentTreeDb>,
+    context: &'static str,
+) -> Result<(usize, usize)> {
+    let nullifiers = hashtable
+        .as_ref()
+        .map(|_| chain_ingest::extract_ironwood_nullifiers(&block.block))
+        .transpose()?;
+    let parsed_commitments = tree
+        .as_ref()
+        .map(|_| {
+            let commitments = commitment_ingest::extract_commitments(&block.block)?;
+            let prior_tree_size =
+                commitment_ingest::ironwood_prior_tree_size(&block.block, commitments.len())?;
+            Ok::<_, commitment_ingest::ParseError>((commitments, prior_tree_size))
+        })
+        .transpose()
+        .map_err(witness_server::server::ServerError::from)?;
+
+    if let (Some(tree), Some((_, prior_tree_size))) = (tree.as_deref(), &parsed_commitments) {
+        witness_server::server::validate_prior_tree_size(
+            tree,
+            block.height(),
+            Some(*prior_tree_size),
+            context,
+        )?;
+    }
+    if let (Some(db), Some(nullifiers)) = (hashtable.as_deref_mut(), &nullifiers) {
+        db.insert_block(block.height(), block.hash, nullifiers)?;
+    }
+    if let (Some(tree), Some((commitments, _))) = (tree.as_deref_mut(), &parsed_commitments) {
+        tree.append_commitments(block.height(), block.hash, commitments);
+    }
+
+    Ok((
+        nullifiers.as_ref().map_or(0, Vec::len),
+        parsed_commitments
+            .as_ref()
+            .map_or(0, |(commitments, _)| commitments.len()),
+    ))
+}
+
+fn evict_to_size(hashtable: &mut HashTableDb, target_size: usize) {
+    while hashtable.len() > target_size && hashtable.evict_oldest_block().is_some() {}
+}
+
+fn rebuild_both<NfP: PirEngine, WitP: PirEngine>(
+    config: &CombinedConfig,
+    nf_state: &Arc<spend_server::state::AppState<NfP>>,
+    wit_state: &Arc<witness_server::state::AppState<WitP>>,
+    hashtable: &HashTableDb,
     tree: &mut CommitmentTreeDb,
-    initial_tree_size: Option<u32>,
 ) -> Result<()> {
-    let phase = arc_swap::ArcSwap::from_pointee(ServerPhase::Serving);
-    witness_server::server::sync_range(lwd_urls, from, to, tree, initial_tree_size, &phase)
-        .await
-        .map_err(ServerError::Witness)?;
+    let nf_pir = spend_server::server::rebuild_pir(
+        &*nf_state.engine,
+        hashtable,
+        &nf_state.scenario,
+        config.zcash_network,
+    )?;
+    nf_state.live_pir.store(Arc::new(Some(nf_pir)));
+
+    let anchor_height = tree.latest_height().unwrap_or(0);
+    let wit_pir = witness_server::server::rebuild_pir(
+        &*wit_state.engine,
+        tree,
+        &wit_state.scenario,
+        anchor_height,
+        config.zcash_network,
+    )?;
+    wit_state.live_pir.store(Arc::new(Some(wit_pir)));
     Ok(())
 }
 
-fn to_hash_array(bytes: &[u8]) -> [u8; 32] {
-    let mut arr = [0u8; 32];
-    let len = bytes.len().min(32);
-    arr[..len].copy_from_slice(&bytes[..len]);
-    arr
+async fn save_both(
+    config: &CombinedConfig,
+    hashtable: &HashTableDb,
+    tree: &CommitmentTreeDb,
+) -> Result<()> {
+    spend_server::snapshot_io::save_snapshot(hashtable, &config.data_dir.join("nullifier"))
+        .await
+        .map_err(spend_server::server::ServerError::from)?;
+    witness_server::snapshot_io::save_snapshot(tree, &config.data_dir.join("witness"))
+        .await
+        .map_err(witness_server::server::ServerError::from)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chain_ingest::proto::{ChainMetadata, CompactBlock, CompactOrchardAction, CompactTx};
+
+    #[test]
+    fn one_validated_block_feeds_both_stores() {
+        let nullifier = [7; 32];
+        let commitment = [2; 32];
+        let compact = CompactBlock {
+            height: 10,
+            hash: vec![10; 32],
+            prev_hash: vec![9; 32],
+            vtx: vec![CompactTx {
+                ironwood_actions: vec![CompactOrchardAction {
+                    nullifier: nullifier.to_vec(),
+                    cmx: commitment.to_vec(),
+                    ephemeral_key: vec![3; 32],
+                    ciphertext: vec![4; 52],
+                }],
+                ..Default::default()
+            }],
+            chain_metadata: Some(ChainMetadata {
+                ironwood_commitment_tree_size: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let block = ValidatedBlock {
+            block: compact,
+            hash: [10; 32],
+            prev_hash: [9; 32],
+        };
+        let mut hashtable = HashTableDb::new();
+        let mut tree = CommitmentTreeDb::new();
+
+        apply_block(&block, Some(&mut hashtable), Some(&mut tree), "test").unwrap();
+
+        assert!(hashtable.contains(&nullifier));
+        assert_eq!(tree.leaves(), &[commitment]);
+        assert_eq!(hashtable.latest_height(), tree.latest_height());
+    }
 }

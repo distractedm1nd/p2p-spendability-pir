@@ -1,4 +1,5 @@
-use pir_types::YpirScenario;
+use pir_types::{YpirScenario, ZcashNetwork, DATASET_VERSION, IRONWOOD_POOL};
+use serde::Deserialize;
 use thiserror::Error;
 use witness_types::*;
 use ypir::client::YPIRClient;
@@ -25,6 +26,13 @@ pub enum WitnessClientError {
 
 pub type Result<T> = std::result::Result<T, WitnessClientError>;
 
+#[derive(Deserialize)]
+struct Metadata {
+    zcash_network: ZcashNetwork,
+    commitment_pool: String,
+    dataset_version: u32,
+}
+
 pub struct WitnessClient {
     http: reqwest::Client,
     base_url: String,
@@ -38,10 +46,26 @@ impl WitnessClient {
     /// Connect to a witness-server, fetch params and broadcast data, initialize
     /// the PIR client. The broadcast download is ~104 KB and cached for the
     /// lifetime of this client.
-    pub async fn connect(url: &str) -> Result<Self> {
+    pub async fn connect(url: &str, zcash_network: ZcashNetwork) -> Result<Self> {
         let t0 = std::time::Instant::now();
         let base_url = url.trim_end_matches('/').to_string();
         let http = reqwest::Client::new();
+
+        let metadata: Metadata = http
+            .get(format!("{base_url}/metadata"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if metadata.zcash_network != zcash_network
+            || metadata.commitment_pool != IRONWOOD_POOL
+            || metadata.dataset_version != DATASET_VERSION
+        {
+            return Err(WitnessClientError::InvalidParams(
+                "server is not the expected Ironwood witness dataset".into(),
+            ));
+        }
 
         let scenario: YpirScenario = http
             .get(format!("{base_url}/params"))
@@ -50,6 +74,13 @@ impl WitnessClient {
             .error_for_status()?
             .json()
             .await?;
+        if scenario.num_items != L0_DB_ROWS as u64
+            || scenario.item_size_bits != (SUBSHARD_ROW_BYTES * 8) as u64
+        {
+            return Err(WitnessClientError::InvalidParams(
+                "unexpected Ironwood witness PIR geometry".into(),
+            ));
+        }
         tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "fetched /params");
 
         let t1 = std::time::Instant::now();
@@ -104,7 +135,11 @@ impl WitnessClient {
     pub async fn get_witness(&self, position: u64) -> Result<PirWitness> {
         let t0 = std::time::Instant::now();
         let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
-        let window_end = self.broadcast.window_start_shard + self.broadcast.window_shard_count;
+        let window_end = self
+            .broadcast
+            .window_start_shard
+            .checked_add(self.broadcast.window_shard_count)
+            .ok_or_else(|| WitnessClientError::InvalidParams("invalid PIR window".into()))?;
 
         if shard_idx < self.broadcast.window_start_shard || shard_idx >= window_end {
             return Err(WitnessClientError::PositionOutsideWindow(
@@ -214,12 +249,12 @@ pub struct WitnessClientBlocking {
 }
 
 impl WitnessClientBlocking {
-    pub fn connect(url: &str) -> Result<Self> {
+    pub fn connect(url: &str, zcash_network: ZcashNetwork) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?;
-        let client = rt.block_on(WitnessClient::connect(url))?;
+        let client = rt.block_on(WitnessClient::connect(url, zcash_network))?;
         Ok(Self { rt, client })
     }
 

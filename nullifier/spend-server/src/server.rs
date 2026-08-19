@@ -3,20 +3,24 @@ use crate::snapshot_io;
 use crate::state::{AppState, PirState, ServerConfig};
 use axum::routing::{get, post};
 use axum::Router;
+use chain_ingest::{BlockEvent, PipelineError};
 use hashtable_pir::HashTableDb;
 use spend_types::{
-    ChainEvent, PirEngine, ServerPhase, SpendabilityMetadata, NU5_MAINNET_ACTIVATION, NUM_BUCKETS,
+    PirEngine, ServerPhase, SpendabilityMetadata, ZcashNetwork, DATASET_VERSION, IRONWOOD_POOL,
+    NUM_BUCKETS,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 const BACKFILL_BATCH: u64 = 50_000;
+const FOLLOW_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SNAPSHOT_ARTIFACTS: &[&str] = &["snapshot.bin", "snapshot.bin.tmp"];
 
-/// Lowest block height we'll ever sync. On mainnet this is the NU5 activation
-/// height; on test chains whose tip is below that, fall back to height 1.
-fn min_sync_height(tip_height: u64) -> u64 {
-    if tip_height >= NU5_MAINNET_ACTIVATION {
-        NU5_MAINNET_ACTIVATION
+fn min_sync_height(tip_height: u64, network: ZcashNetwork) -> u64 {
+    let activation = chain_ingest::nu6_3_activation_height(network);
+    if tip_height >= activation {
+        activation
     } else {
         1
     }
@@ -24,8 +28,12 @@ fn min_sync_height(tip_height: u64) -> u64 {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
-    #[error("ingest error: {0}")]
-    Ingest(Box<nf_ingest::ingest::IngestError>),
+    #[error(transparent)]
+    Client(#[from] chain_ingest::ClientError),
+    #[error(transparent)]
+    Pipeline(#[from] PipelineError),
+    #[error(transparent)]
+    Ironwood(#[from] chain_ingest::IronwoodError),
     #[error("hashtable error: {0}")]
     HashTable(#[from] hashtable_pir::HashTableError),
     #[error("snapshot io error: {0}")]
@@ -34,12 +42,12 @@ pub enum ServerError {
     PirSetup(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-}
-
-impl From<nf_ingest::ingest::IngestError> for ServerError {
-    fn from(e: nf_ingest::ingest::IngestError) -> Self {
-        ServerError::Ingest(Box::new(e))
-    }
+    #[error("ingest task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Dataset(#[from] chain_ingest::DatasetError),
+    #[error(transparent)]
+    Endpoint(#[from] chain_ingest::EndpointError),
 }
 
 pub type Result<T> = std::result::Result<T, ServerError>;
@@ -59,6 +67,7 @@ pub fn rebuild_pir<P: PirEngine>(
     engine: &P,
     hashtable: &HashTableDb,
     scenario: &spend_types::YpirScenario,
+    zcash_network: ZcashNetwork,
 ) -> std::result::Result<PirState<P>, ServerError> {
     let total_start = std::time::Instant::now();
 
@@ -73,6 +82,9 @@ pub fn rebuild_pir<P: PirEngine>(
     let setup_ms = setup_start.elapsed().as_millis();
 
     let metadata = SpendabilityMetadata {
+        zcash_network,
+        nullifier_pool: IRONWOOD_POOL.into(),
+        dataset_version: DATASET_VERSION,
         earliest_height: hashtable.earliest_height().unwrap_or(0),
         latest_height: hashtable.latest_height().unwrap_or(0),
         num_nullifiers: hashtable.len() as u64,
@@ -99,48 +111,38 @@ pub fn rebuild_pir<P: PirEngine>(
 /// Sync a block range into the hashtable, reporting progress via `phase`.
 pub async fn sync_range(
     lwd_urls: &[String],
+    zcash_network: ZcashNetwork,
     from: u64,
     to: u64,
     hashtable: &mut HashTableDb,
-    initial_tree_size: Option<u32>,
     phase: &arc_swap::ArcSwap<ServerPhase>,
 ) -> Result<()> {
     if from > to {
         return Ok(());
     }
 
-    let (tx, mut rx) = mpsc::channel::<ChainEvent>(1000);
-    let sync_handle = {
-        let mut client = nf_ingest::LwdClient::connect(lwd_urls)
-            .await
-            .map_err(nf_ingest::ingest::IngestError::from)?;
-        tokio::spawn(async move {
-            nf_ingest::ingest::sync(&mut client, from, to, initial_tree_size, &tx).await
-        })
-    };
-
-    while let Some(event) = rx.recv().await {
-        if let ChainEvent::NewBlock {
-            height,
-            hash,
-            nullifiers,
-            ..
-        } = event
-        {
-            hashtable.insert_block(height, hash, &nullifiers)?;
-
-            if height % 1000 == 0 {
+    let mut client = chain_ingest::LwdClient::connect(lwd_urls).await?;
+    chain_ingest::require_ironwood_tree_state(&mut client, zcash_network, to).await?;
+    chain_ingest::sync_blocks(&mut client, from, to, |block| {
+        let result = (|| {
+            let nullifiers = chain_ingest::extract_ironwood_nullifiers(&block.block)?;
+            hashtable.insert_block(block.height(), block.hash, &nullifiers)?;
+            if block.height() % 1000 == 0 {
                 phase.store(Arc::new(ServerPhase::Syncing {
-                    current_height: height,
+                    current_height: block.height(),
                     target_height: to,
                 }));
-                tracing::info!(height, nullifiers = hashtable.len(), "sync progress");
+                tracing::info!(
+                    height = block.height(),
+                    nullifiers = hashtable.len(),
+                    "sync progress"
+                );
             }
-        }
-    }
-
-    sync_handle.await.ok();
-    Ok(())
+            Ok(())
+        })();
+        std::future::ready(result)
+    })
+    .await
 }
 
 /// Main server entry point. Runs sync mode, transitions to follow mode, serves HTTP.
@@ -163,102 +165,7 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         }
     };
 
-    // Connect to lightwalletd
-    let mut client = nf_ingest::LwdClient::connect(&config.lwd_urls)
-        .await
-        .map_err(nf_ingest::ingest::IngestError::from)?;
-
-    let (tip_height, _) = client
-        .get_latest_block()
-        .await
-        .map_err(nf_ingest::ingest::IngestError::from)?;
-
-    // Load snapshot or fresh start
-    let (mut hashtable, from_snapshot) = match snapshot_io::load_snapshot(&config.data_dir).await {
-        Ok(ht) => {
-            let resume = ht.latest_height().map(|h| h + 1).unwrap_or(0);
-            tracing::info!(resume_height = resume, "loaded snapshot");
-            (ht, true)
-        }
-        Err(_) => (HashTableDb::new(), false),
-    };
-
-    // Sync mode: catch up to tip, then backfill if we need more nullifiers
-    let floor = min_sync_height(tip_height);
-    let forward_start = if from_snapshot {
-        hashtable
-            .latest_height()
-            .map(|h| h + 1)
-            .unwrap_or(tip_height)
-    } else {
-        let initial = tip_height.saturating_sub(BACKFILL_BATCH);
-        initial.max(floor)
-    };
-
-    if forward_start <= tip_height {
-        app_state.phase.store(Arc::new(ServerPhase::Syncing {
-            current_height: forward_start,
-            target_height: tip_height,
-        }));
-        tracing::info!(from = forward_start, to = tip_height, "entering sync mode");
-        sync_range(
-            &config.lwd_urls,
-            forward_start,
-            tip_height,
-            &mut hashtable,
-            None,
-            &app_state.phase,
-        )
-        .await?;
-    }
-
-    // Backfill earlier blocks until we reach target_size or the floor height
-    if !from_snapshot {
-        let mut backfill_end = forward_start.saturating_sub(1);
-        while hashtable.len() < config.target_size && backfill_end >= floor {
-            let backfill_start = backfill_end.saturating_sub(BACKFILL_BATCH - 1).max(floor);
-            tracing::info!(
-                from = backfill_start,
-                to = backfill_end,
-                nullifiers = hashtable.len(),
-                target = config.target_size,
-                "backfilling earlier blocks",
-            );
-            sync_range(
-                &config.lwd_urls,
-                backfill_start,
-                backfill_end,
-                &mut hashtable,
-                None,
-                &app_state.phase,
-            )
-            .await?;
-
-            if backfill_start == floor {
-                break;
-            }
-            backfill_end = backfill_start.saturating_sub(1);
-        }
-        tracing::info!(
-            nullifiers = hashtable.len(),
-            blocks = hashtable.num_blocks(),
-            earliest = hashtable.earliest_height(),
-            latest = hashtable.latest_height(),
-            "sync complete",
-        );
-    }
-
-    // Save snapshot after sync
-    snapshot_io::save_snapshot(&hashtable, &config.data_dir).await?;
-    tracing::info!("snapshot saved after sync");
-
-    // Evict down to target now that we've filled up
-    hashtable.evict_to_target();
-
-    // Build PIR once and start serving
-    let pir_state = rebuild_pir(&*engine, &hashtable, &app_state.scenario)?;
-    app_state.live_pir.store(Arc::new(Some(pir_state)));
-    app_state.phase.store(Arc::new(ServerPhase::Serving));
+    let mut hashtable = sync_into(app_state.clone()).await?;
     tracing::info!(
         height = hashtable.latest_height(),
         nullifiers = hashtable.len(),
@@ -281,14 +188,33 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
     let latest_height = hashtable.latest_height().unwrap_or(0);
     let latest_hash = hashtable.latest_block_hash().unwrap_or([0u8; 32]);
 
-    let (tx, mut rx) = mpsc::channel::<ChainEvent>(100);
+    let (tx, mut rx) = mpsc::channel::<BlockEvent>(100);
     let follow_handle = {
-        let mut follow_client = nf_ingest::LwdClient::connect(&config.lwd_urls)
-            .await
-            .map_err(nf_ingest::ingest::IngestError::from)?;
+        let mut follow_client = chain_ingest::LwdClient::connect(&config.lwd_urls).await?;
+        chain_ingest::require_ironwood_tree_state(
+            &mut follow_client,
+            config.zcash_network,
+            latest_height,
+        )
+        .await?;
         tokio::spawn(async move {
-            nf_ingest::ingest::follow(&mut follow_client, latest_height, latest_hash, None, &tx)
-                .await
+            chain_ingest::follow_blocks(
+                &mut follow_client,
+                latest_height,
+                latest_hash,
+                config.confirmation_depth,
+                spend_types::CONFIRMATION_DEPTH as usize * 2,
+                FOLLOW_POLL_INTERVAL,
+                |event| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send(event)
+                            .await
+                            .map_err(|_| PipelineError::ConsumerDropped)
+                    }
+                },
+            )
+            .await
         })
     };
 
@@ -296,41 +222,35 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
 
     while let Some(event) = rx.recv().await {
         match event {
-            ChainEvent::NewBlock {
-                height,
-                hash,
-                nullifiers,
-                ..
-            } => {
-                hashtable.insert_block(height, hash, &nullifiers)?;
+            BlockEvent::NewBlock(block) => {
+                let nullifiers = chain_ingest::extract_ironwood_nullifiers(&block.block)?;
+                hashtable.insert_block(block.height(), block.hash, &nullifiers)?;
                 hashtable.evict_to_target();
                 blocks_since_snapshot += 1;
-                tracing::info!(height, nfs = nullifiers.len(), "new block");
+                tracing::info!(height = block.height(), nfs = nullifiers.len(), "new block");
             }
-            ChainEvent::Reorg {
-                orphaned,
-                new_blocks,
-            } => {
-                for block in orphaned.iter().rev() {
-                    if let Err(e) = hashtable.rollback_block(&block.hash) {
-                        tracing::warn!(height = block.height, error = %e, "rollback failed, skipping");
+            BlockEvent::Reorg { rollback_to } => {
+                while hashtable
+                    .latest_height()
+                    .is_some_and(|height| height > rollback_to)
+                {
+                    if let Some(hash) = hashtable.latest_block_hash() {
+                        hashtable.rollback_block(&hash)?;
                     }
                 }
-                for block in &new_blocks {
-                    hashtable.insert_block(block.height, block.hash, &block.nullifiers)?;
-                }
                 hashtable.evict_to_target();
                 blocks_since_snapshot += 1;
-                tracing::info!(
-                    orphaned = orphaned.len(),
-                    new = new_blocks.len(),
-                    "reorg handled"
-                );
+                tracing::info!(rollback_to, "reorg handled");
             }
         }
 
         // Rebuild PIR and atomic swap
-        let pir_state = rebuild_pir(&*engine, &hashtable, &app_state.scenario)?;
+        let pir_state = rebuild_pir(
+            &*engine,
+            &hashtable,
+            &app_state.scenario,
+            config.zcash_network,
+        )?;
         app_state.live_pir.store(Arc::new(Some(pir_state)));
 
         // Periodic snapshot
@@ -341,7 +261,7 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         }
     }
 
-    follow_handle.abort();
+    follow_handle.await??;
     http_handle.abort();
     Ok(())
 }
@@ -360,43 +280,51 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
 pub async fn sync_into<P: PirEngine + 'static>(app_state: Arc<AppState<P>>) -> Result<HashTableDb> {
     let config = app_state.config.clone();
     let engine = app_state.engine.clone();
+    chain_ingest::ensure_ironwood_dataset(
+        &config.data_dir,
+        config.zcash_network,
+        SNAPSHOT_ARTIFACTS,
+    )?;
 
-    let mut client = nf_ingest::LwdClient::connect(&config.lwd_urls)
-        .await
-        .map_err(nf_ingest::ingest::IngestError::from)?;
+    let mut client = chain_ingest::LwdClient::connect(&config.lwd_urls).await?;
 
-    let (tip_height, _) = client
-        .get_latest_block()
-        .await
-        .map_err(nf_ingest::ingest::IngestError::from)?;
+    let (tip_height, _) = client.get_latest_block().await?;
+    let target_height = tip_height.saturating_sub(config.confirmation_depth);
+    chain_ingest::require_ironwood_tree_state(&mut client, config.zcash_network, target_height)
+        .await?;
 
     let (mut hashtable, from_snapshot) = match snapshot_io::load_snapshot(&config.data_dir).await {
         Ok(ht) => (ht, true),
-        Err(_) => (HashTableDb::new(), false),
+        Err(snapshot_io::SnapshotIoError::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            (HashTableDb::new(), false)
+        }
+        Err(error) => return Err(error.into()),
     };
 
-    let floor = min_sync_height(tip_height);
+    let floor = min_sync_height(target_height, config.zcash_network);
     let forward_start = if from_snapshot {
         hashtable
             .latest_height()
             .map(|h| h + 1)
-            .unwrap_or(tip_height)
+            .unwrap_or(target_height)
     } else {
-        let initial = tip_height.saturating_sub(BACKFILL_BATCH);
+        let initial = target_height.saturating_sub(BACKFILL_BATCH);
         initial.max(floor)
     };
 
-    if forward_start <= tip_height {
+    if forward_start <= target_height {
         app_state.phase.store(Arc::new(ServerPhase::Syncing {
             current_height: forward_start,
-            target_height: tip_height,
+            target_height,
         }));
         sync_range(
             &config.lwd_urls,
+            config.zcash_network,
             forward_start,
-            tip_height,
+            target_height,
             &mut hashtable,
-            None,
             &app_state.phase,
         )
         .await?;
@@ -408,10 +336,10 @@ pub async fn sync_into<P: PirEngine + 'static>(app_state: Arc<AppState<P>>) -> R
             let backfill_start = backfill_end.saturating_sub(BACKFILL_BATCH - 1).max(floor);
             sync_range(
                 &config.lwd_urls,
+                config.zcash_network,
                 backfill_start,
                 backfill_end,
                 &mut hashtable,
-                None,
                 &app_state.phase,
             )
             .await?;
@@ -424,11 +352,15 @@ pub async fn sync_into<P: PirEngine + 'static>(app_state: Arc<AppState<P>>) -> R
     }
 
     hashtable.evict_to_target();
-    snapshot_io::save_snapshot(&hashtable, &config.data_dir).await?;
-
-    let pir_state = rebuild_pir(&*engine, &hashtable, &app_state.scenario)?;
+    let pir_state = rebuild_pir(
+        &*engine,
+        &hashtable,
+        &app_state.scenario,
+        config.zcash_network,
+    )?;
     app_state.live_pir.store(Arc::new(Some(pir_state)));
     app_state.phase.store(Arc::new(ServerPhase::Serving));
+    snapshot_io::save_snapshot(&hashtable, &config.data_dir).await?;
 
     Ok(hashtable)
 }

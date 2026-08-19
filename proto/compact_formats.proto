@@ -10,6 +10,7 @@ option swift_prefix = "";
 message ChainMetadata {
     uint32 saplingCommitmentTreeSize = 1;
     uint32 orchardCommitmentTreeSize = 2;
+    uint32 ironwoodCommitmentTreeSize = 3;
 }
 
 message CompactBlock {
@@ -32,6 +33,7 @@ message CompactTx {
     repeated CompactOrchardAction actions = 6;
     repeated CompactTxIn vin = 7;
     repeated TxOut vout = 8;
+    repeated CompactOrchardAction ironwoodActions = 9;
 }
 
 message CompactTxIn {

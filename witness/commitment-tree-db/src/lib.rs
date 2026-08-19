@@ -1,4 +1,4 @@
-//! In-memory Orchard note commitment tree with shard/sub-shard decomposition.
+//! In-memory Ironwood note commitment tree with shard/sub-shard decomposition.
 //!
 //! Maintains an append-only leaf store with per-block rollback support.
 //! Computes shard roots, sub-shard roots, and serializes PIR database rows
@@ -9,7 +9,7 @@
 //! When constructed via [`CommitmentTreeDb::with_offset`], only leaves within
 //! the PIR window are stored. Shard roots for earlier shards are provided via
 //! `prefetched_shard_roots` (from lightwalletd's `GetSubtreeRoots`), avoiding
-//! the need to sync the entire chain from NU5 activation.
+//! the need to sync the entire chain from NU6.3 activation.
 //!
 //! # Operations
 //!
@@ -46,7 +46,7 @@ pub enum TreeError {
     SnapshotCorrupted { reason: String },
 }
 
-/// In-memory Orchard note commitment tree.
+/// In-memory Ironwood note commitment tree.
 ///
 /// Stores leaf commitments within the PIR window and per-block metadata for
 /// rollback. Hash computations use [`MerkleHashOrchard`] (Sinsemilla) with
@@ -76,6 +76,10 @@ pub struct CommitmentTreeDb {
 }
 
 impl CommitmentTreeDb {
+    pub fn is_canonical_hash(hash: &Hash) -> bool {
+        bool::from(MerkleHashOrchard::from_bytes(hash).is_some())
+    }
+
     pub fn new() -> Self {
         Self {
             leaves: Vec::new(),
@@ -785,7 +789,7 @@ mod tests {
 
     #[test]
     fn with_offset_basic() {
-        let prefetched = vec![[0xAA; 32]; 5];
+        let prefetched = vec![make_leaf(0xAA); 5];
         let offset = 5 * SHARD_LEAVES as u64;
         let tree = CommitmentTreeDb::with_offset(offset, prefetched.clone());
 
@@ -798,7 +802,7 @@ mod tests {
 
     #[test]
     fn with_offset_append_and_broadcast() {
-        let prefetched = vec![[0xAA; 32]; 2];
+        let prefetched = vec![make_leaf(0xAA); 2];
         let offset = 2 * SHARD_LEAVES as u64;
         let mut tree = CommitmentTreeDb::with_offset(offset, prefetched.clone());
 
@@ -810,8 +814,8 @@ mod tests {
 
         let bd = tree.broadcast_data(100);
         assert_eq!(bd.cap.shard_roots.len(), 3);
-        assert_eq!(bd.cap.shard_roots[0], [0xAA; 32]);
-        assert_eq!(bd.cap.shard_roots[1], [0xAA; 32]);
+        assert_eq!(bd.cap.shard_roots[0], make_leaf(0xAA));
+        assert_eq!(bd.cap.shard_roots[1], make_leaf(0xAA));
         assert_eq!(bd.window_start_shard, 2);
         assert_eq!(bd.window_shard_count, 1);
         assert_eq!(bd.subshard_roots.len(), 1);
@@ -819,7 +823,7 @@ mod tests {
 
     #[test]
     fn with_offset_shard_roots_combines_prefetched_and_computed() {
-        let prefetched = vec![[0xBB; 32]; 3];
+        let prefetched = vec![make_leaf(0xBB); 3];
         let offset = 3 * SHARD_LEAVES as u64;
         let mut tree = CommitmentTreeDb::with_offset(offset, prefetched);
 
@@ -827,15 +831,15 @@ mod tests {
 
         let roots = tree.shard_roots();
         assert_eq!(roots.len(), 4);
-        assert_eq!(roots[0], (0, [0xBB; 32]));
-        assert_eq!(roots[1], (1, [0xBB; 32]));
-        assert_eq!(roots[2], (2, [0xBB; 32]));
-        assert_ne!(roots[3].1, [0xBB; 32]);
+        assert_eq!(roots[0], (0, make_leaf(0xBB)));
+        assert_eq!(roots[1], (1, make_leaf(0xBB)));
+        assert_eq!(roots[2], (2, make_leaf(0xBB)));
+        assert_ne!(roots[3].1, make_leaf(0xBB));
     }
 
     #[test]
     fn with_offset_pir_db_starts_at_window() {
-        let prefetched = vec![[0xCC; 32]; 2];
+        let prefetched = vec![make_leaf(0xCC); 2];
         let offset = 2 * SHARD_LEAVES as u64;
         let mut tree = CommitmentTreeDb::with_offset(offset, prefetched);
 

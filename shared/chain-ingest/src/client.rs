@@ -113,7 +113,7 @@ impl LwdClient {
 
     /// Get completed subtree (shard) roots for a shielded protocol.
     ///
-    /// `protocol`: 0 = Sapling, 1 = Orchard.
+    /// `protocol`: 0 = Sapling, 1 = Orchard, 2 = Ironwood.
     /// Returns roots starting from `start_index`, up to `max_entries`.
     pub async fn get_subtree_roots(
         &mut self,

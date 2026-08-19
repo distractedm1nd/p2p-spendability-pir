@@ -155,8 +155,13 @@ impl CompactTxStreamer for MockStreamer {
     ) -> Result<Response<Self::GetMempoolStreamStream>, Status> {
         Err(Status::unimplemented(""))
     }
-    async fn get_tree_state(&self, _: Request<BlockId>) -> Result<Response<TreeState>, Status> {
-        Err(Status::unimplemented(""))
+    async fn get_tree_state(&self, req: Request<BlockId>) -> Result<Response<TreeState>, Status> {
+        Ok(Response::new(TreeState {
+            network: "main".into(),
+            height: req.into_inner().height,
+            ironwood_tree: "00".into(),
+            ..Default::default()
+        }))
     }
     async fn get_latest_tree_state(
         &self,
@@ -254,7 +259,7 @@ fn make_compact_block(
             vec![]
         } else {
             vec![CompactTx {
-                actions,
+                ironwood_actions: actions,
                 ..Default::default()
             }]
         },
@@ -282,8 +287,9 @@ fn build_chain(count: u16, nfs_per_block: u32) -> (Vec<CompactBlock>, Vec<Vec<[u
 
 fn make_config(lwd_addr: SocketAddr, data_dir: &std::path::Path) -> ServerConfig {
     ServerConfig {
+        zcash_network: spend_types::ZcashNetwork::Main,
         target_size: spend_types::TARGET_SIZE,
-        confirmation_depth: spend_types::CONFIRMATION_DEPTH,
+        confirmation_depth: 0,
         snapshot_interval: 100,
         data_dir: data_dir.to_path_buf(),
         lwd_urls: vec![format!("http://{lwd_addr}")],
@@ -503,21 +509,16 @@ async fn test_server_follow_new_block() {
 
     // Simulate follow: insert a new block
     let new_nfs = [make_nf(99_000), make_nf(99_001)];
-    let new_nwms: Vec<spend_types::NullifierWithMeta> = new_nfs
-        .iter()
-        .map(|nf| spend_types::NullifierWithMeta {
-            nullifier: *nf,
-            first_output_position: 0,
-            action_count: 1,
-        })
-        .collect();
-    hashtable.insert_block(11, hash_for(11), &new_nwms).unwrap();
+    hashtable.insert_block(11, hash_for(11), &new_nfs).unwrap();
     hashtable.evict_to_target();
 
     // Rebuild PIR and swap (as the follow loop does)
     let db_bytes = hashtable.to_pir_bytes();
     let engine_state = engine.setup(&db_bytes, &app_state.scenario).unwrap();
     let metadata = spend_types::SpendabilityMetadata {
+        zcash_network: spend_types::ZcashNetwork::Main,
+        nullifier_pool: spend_types::IRONWOOD_POOL.into(),
+        dataset_version: spend_types::DATASET_VERSION,
         earliest_height: hashtable.earliest_height().unwrap_or(0),
         latest_height: hashtable.latest_height().unwrap_or(0),
         num_nullifiers: hashtable.len() as u64,
@@ -572,18 +573,10 @@ async fn test_server_reorg_handling() {
     // Simulate reorg: rollback block 10, insert replacement
     hashtable.rollback_block(&hash_for(10)).unwrap();
     let replacement_nfs = vec![make_nf(88_000), make_nf(88_001), make_nf(88_002)];
-    let replacement_nwms: Vec<spend_types::NullifierWithMeta> = replacement_nfs
-        .iter()
-        .map(|nf| spend_types::NullifierWithMeta {
-            nullifier: *nf,
-            first_output_position: 0,
-            action_count: 1,
-        })
-        .collect();
     let mut new_hash_10 = [0u8; 32];
     new_hash_10[0] = 0xAA;
     hashtable
-        .insert_block(10, new_hash_10, &replacement_nwms)
+        .insert_block(10, new_hash_10, &replacement_nfs)
         .unwrap();
     hashtable.evict_to_target();
 
@@ -591,6 +584,9 @@ async fn test_server_reorg_handling() {
     let db_bytes = hashtable.to_pir_bytes();
     let engine_state = engine.setup(&db_bytes, &app_state.scenario).unwrap();
     let metadata = spend_types::SpendabilityMetadata {
+        zcash_network: spend_types::ZcashNetwork::Main,
+        nullifier_pool: spend_types::IRONWOOD_POOL.into(),
+        dataset_version: spend_types::DATASET_VERSION,
         earliest_height: hashtable.earliest_height().unwrap_or(0),
         latest_height: hashtable.latest_height().unwrap_or(0),
         num_nullifiers: hashtable.len() as u64,

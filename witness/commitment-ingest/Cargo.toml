@@ -5,9 +5,6 @@ edition = "2021"
 
 [dependencies]
 witness-types = { path = "../witness-types" }
-decryption-types = { path = "../decryption-types" }
 chain-ingest = { path = "../../shared/chain-ingest" }
-pir-types = { path = "../../shared/pir-types" }
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
 thiserror = "2"
+orchard = { version = "0.15", default-features = false }

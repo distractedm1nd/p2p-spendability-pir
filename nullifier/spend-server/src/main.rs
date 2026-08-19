@@ -1,7 +1,9 @@
 use clap::Parser;
 use spend_server::state::ServerConfig;
 use spend_server::{pir_ypir::YpirPirEngine, server};
-use spend_types::{YpirScenario, BUCKET_BYTES, CONFIRMATION_DEPTH, NUM_BUCKETS, TARGET_SIZE};
+use spend_types::{
+    YpirScenario, ZcashNetwork, BUCKET_BYTES, CONFIRMATION_DEPTH, NUM_BUCKETS, TARGET_SIZE,
+};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +12,10 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(name = "spend-server", about = "Private nullifier spendability server")]
 struct Cli {
+    /// Zcash network to ingest.
+    #[arg(long)]
+    zcash_network: ZcashNetwork,
+
     /// Directory for snapshots and hint cache
     #[arg(long, default_value = "./data")]
     data_dir: PathBuf,
@@ -44,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&cli.data_dir)?;
 
     let config = ServerConfig {
+        zcash_network: cli.zcash_network,
         target_size: cli.target_size,
         confirmation_depth: CONFIRMATION_DEPTH,
         snapshot_interval: cli.snapshot_interval,

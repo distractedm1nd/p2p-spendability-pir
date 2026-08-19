@@ -12,7 +12,6 @@ members = [
     "witness/commitment-ingest",
     "witness/commitment-tree-db",
     "witness/witness-server",
-    "witness/decryption-types",
     "witness/witness-client",
     "combined-server",
     "zakura-server",

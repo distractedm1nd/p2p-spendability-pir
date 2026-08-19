@@ -1,6 +1,6 @@
 //! Types and constants for the witness PIR subsystem.
 //!
-//! Defines the Orchard note commitment tree geometry, the [`PirWitness`] type
+//! Defines the Ironwood note commitment tree geometry, the [`PirWitness`] type
 //! returned by the witness client, and broadcast metadata structures. Uses raw
 //! byte arrays ([`Hash`] = `[u8; 32]`) rather than `orchard` crate types so
 //! this crate stays lightweight; conversions to/from `MerkleHashOrchard` happen
@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Orchard note commitment tree depth (32 levels, 2^32 leaf positions).
+/// Ironwood note commitment tree depth (32 levels, 2^32 leaf positions).
 pub const TREE_DEPTH: usize = 32;
 
 /// Number of levels per shard (top tier). Each shard covers 2^16 = 65,536 leaves.
@@ -124,25 +124,6 @@ pub struct BroadcastData {
     pub anchor_height: u64,
 }
 
-/// Chain event specific to the witness ingest pipeline.
-#[derive(Debug, Clone)]
-pub enum WitnessChainEvent {
-    /// A new block with note commitments was ingested.
-    NewBlock {
-        height: u64,
-        hash: [u8; 32],
-        prev_hash: [u8; 32],
-        /// Orchard note commitments (`cmx`) extracted from this block, in order.
-        commitments: Vec<Hash>,
-        /// Orchard commitment tree size at the start of this block (from the
-        /// previous block's `ChainMetadata.orchardCommitmentTreeSize`).
-        /// `None` for the first block or when metadata is unavailable.
-        prior_tree_size: Option<u32>,
-    },
-    /// A reorg was detected; roll back to the given height (exclusive).
-    Reorg { rollback_to: u64 },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,34 +232,5 @@ mod tests {
         assert_eq!(decoded.anchor_height, 2_500_000);
         assert_eq!(decoded.subshard_roots.len(), 1);
         assert_eq!(decoded.subshard_roots[0].roots.len(), SUBSHARDS_PER_SHARD);
-    }
-
-    #[test]
-    fn witness_chain_event_variants() {
-        let new_block = WitnessChainEvent::NewBlock {
-            height: 100,
-            hash: [1u8; 32],
-            prev_hash: [0u8; 32],
-            commitments: vec![[0xCC; 32], [0xDD; 32]],
-            prior_tree_size: Some(500),
-        };
-        if let WitnessChainEvent::NewBlock {
-            commitments,
-            prior_tree_size,
-            ..
-        } = &new_block
-        {
-            assert_eq!(commitments.len(), 2);
-            assert_eq!(*prior_tree_size, Some(500));
-        } else {
-            panic!("expected NewBlock");
-        }
-
-        let reorg = WitnessChainEvent::Reorg { rollback_to: 99 };
-        if let WitnessChainEvent::Reorg { rollback_to } = reorg {
-            assert_eq!(rollback_to, 99);
-        } else {
-            panic!("expected Reorg");
-        }
     }
 }

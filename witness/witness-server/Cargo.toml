@@ -15,9 +15,7 @@ chain-ingest = { path = "../../shared/chain-ingest" }
 pir-types = { path = "../../shared/pir-types" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"

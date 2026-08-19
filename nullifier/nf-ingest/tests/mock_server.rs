@@ -275,7 +275,7 @@ pub fn make_compact_block(
             vec![]
         } else {
             vec![CompactTx {
-                actions,
+                ironwood_actions: actions,
                 ..Default::default()
             }]
         },
@@ -321,29 +321,54 @@ async fn test_sync_stream_mock() {
         .await
         .unwrap();
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(200);
-    nf_ingest::ingest::sync(&mut client, 1, 100, None, &tx)
-        .await
-        .unwrap();
-    drop(tx);
-
     let mut received_count = 0;
     let mut last_height = 0;
-    while let Some(event) = rx.recv().await {
-        match event {
-            spend_types::ChainEvent::NewBlock {
-                height, nullifiers, ..
-            } => {
-                assert!(height > last_height, "blocks should arrive in order");
-                last_height = height;
-                received_count += nullifiers.len();
-            }
-            _ => panic!("sync should only emit NewBlock events"),
-        }
-    }
+    nf_ingest::sync_blocks(&mut client, 1, 100, |block| {
+        let nullifiers = nf_ingest::extract_ironwood_nullifiers(&block.block).unwrap();
+        assert!(
+            block.height() > last_height,
+            "blocks should arrive in order"
+        );
+        last_height = block.height();
+        received_count += nullifiers.len();
+        std::future::ready(Ok::<(), nf_ingest::PipelineError>(()))
+    })
+    .await
+    .unwrap();
 
     assert_eq!(last_height, 100);
     assert_eq!(received_count, all_nf_count);
+}
+
+#[tokio::test]
+async fn test_incomplete_range_emits_nothing() {
+    let state = MockState::new();
+    state.set_blocks(vec![
+        make_compact_block(1, hash_for(1), hash_for(0), &[make_nf(1)]),
+        make_compact_block(3, hash_for(3), hash_for(2), &[make_nf(3)]),
+    ]);
+
+    let (addr, shutdown) = spawn_mock_server(state).await;
+    let mut client = nf_ingest::LwdClient::connect(&[format!("http://{addr}")])
+        .await
+        .unwrap();
+    let mut received = 0;
+    let error = nf_ingest::sync_blocks(&mut client, 1, 3, |_| {
+        received += 1;
+        std::future::ready(Ok::<(), nf_ingest::PipelineError>(()))
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        nf_ingest::PipelineError::UnexpectedHeight {
+            expected: 2,
+            actual: 3
+        }
+    ));
+    assert_eq!(received, 0, "partial range advanced the consumer");
+
+    shutdown.send(()).ok();
 }
 
 #[tokio::test]
@@ -369,7 +394,23 @@ async fn test_follow_new_blocks_mock() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let follow_handle = tokio::spawn(async move {
-        nf_ingest::ingest::follow(&mut client, 5, hash_for(5), None, &tx).await
+        nf_ingest::follow_blocks(
+            &mut client,
+            5,
+            hash_for(5),
+            0,
+            20,
+            std::time::Duration::from_millis(10),
+            |event| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(event)
+                        .await
+                        .map_err(|_| nf_ingest::PipelineError::ConsumerDropped)
+                }
+            },
+        )
+        .await
     });
 
     // Add block 6 after a delay
@@ -388,8 +429,8 @@ async fn test_follow_new_blocks_mock() {
         .expect("channel closed");
 
     match event {
-        spend_types::ChainEvent::NewBlock { height, .. } => {
-            assert_eq!(height, 6);
+        nf_ingest::BlockEvent::NewBlock(block) => {
+            assert_eq!(block.height(), 6);
         }
         _ => panic!("expected NewBlock"),
     }
@@ -418,7 +459,23 @@ async fn test_follow_reorg_mock() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let follow_handle = tokio::spawn(async move {
-        nf_ingest::ingest::follow(&mut client, 3, hash_for(3), None, &tx).await
+        nf_ingest::follow_blocks(
+            &mut client,
+            3,
+            hash_for(3),
+            0,
+            20,
+            std::time::Duration::from_millis(10),
+            |event| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(event)
+                        .await
+                        .map_err(|_| nf_ingest::PipelineError::ConsumerDropped)
+                }
+            },
+        )
+        .await
     });
 
     // Simulate reorg: replace block 3 with 3' (different hash) and add block 4
@@ -443,17 +500,12 @@ async fn test_follow_reorg_mock() {
     // points to reorged_hash_3, which doesn't match our tracked hash(3). This triggers
     // a reorg event.
     match &event {
-        spend_types::ChainEvent::NewBlock { height, .. } => {
+        nf_ingest::BlockEvent::NewBlock(block) => {
             // Block 4 extends normally because follow fetches blocks from height 4 only,
             // and the chain tracker sees prev_hash mismatch
-            assert!(*height >= 4);
+            assert!(block.height() >= 4);
         }
-        spend_types::ChainEvent::Reorg {
-            orphaned,
-            new_blocks,
-        } => {
-            assert!(!orphaned.is_empty() || !new_blocks.is_empty());
-        }
+        nf_ingest::BlockEvent::Reorg { rollback_to } => assert_eq!(*rollback_to, 2),
     }
 
     shutdown.send(()).ok();

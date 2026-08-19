@@ -2,7 +2,17 @@ mod mock_server;
 
 use hashtable_pir::HashTableDb;
 use mock_server::{make_compact_block, spawn_mock_server, MockState};
-use spend_types::{ChainEvent, NullifierWithMeta};
+
+async fn sync_into(client: &mut nf_ingest::LwdClient, from: u64, to: u64, db: &mut HashTableDb) {
+    nf_ingest::sync_blocks(client, from, to, |block| {
+        let nullifiers = nf_ingest::extract_ironwood_nullifiers(&block.block).unwrap();
+        db.insert_block(block.height(), block.hash, &nullifiers)
+            .unwrap();
+        std::future::ready(Ok::<(), nf_ingest::PipelineError>(()))
+    })
+    .await
+    .unwrap();
+}
 
 fn hash_for(n: u16) -> [u8; 32] {
     let mut h = [0u8; 32];
@@ -17,16 +27,6 @@ fn make_nf(seed: u32) -> [u8; 32] {
         *byte = ((seed >> ((i % 4) * 8)) as u8).wrapping_add(i as u8);
     }
     nf
-}
-
-fn nfs_to_nwms(nfs: &[[u8; 32]]) -> Vec<NullifierWithMeta> {
-    nfs.iter()
-        .map(|nf| NullifierWithMeta {
-            nullifier: *nf,
-            first_output_position: 0,
-            action_count: nfs.len() as u8,
-        })
-        .collect()
 }
 
 /// Build a chain of compact blocks, each with `nfs_per_block` random nullifiers.
@@ -63,41 +63,10 @@ async fn test_sync_into_hashtable() {
         .await
         .unwrap();
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
-    let sync_handle = tokio::spawn(async move {
-        nf_ingest::ingest::sync(&mut client, 1, 500, None, &tx)
-            .await
-            .unwrap();
-    });
-
     let mut db = HashTableDb::new();
-    let mut events_received = 0;
+    sync_into(&mut client, 1, 500, &mut db).await;
 
-    let drain_handle = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                ChainEvent::NewBlock {
-                    height,
-                    hash,
-                    nullifiers,
-                    ..
-                } => {
-                    db.insert_block(height, hash, &nullifiers).unwrap();
-                    events_received += 1;
-                }
-                _ => panic!("sync should only emit NewBlock"),
-            }
-        }
-        (db, events_received)
-    });
-
-    sync_handle.await.unwrap();
-    let (db, events_received) = drain_handle.await.unwrap();
-
-    assert_eq!(
-        events_received, 500,
-        "should receive exactly 500 block events"
-    );
+    assert_eq!(db.num_blocks(), 500);
     assert_eq!(
         db.len(),
         total_nfs,
@@ -125,24 +94,8 @@ async fn test_sync_reorg_rollback_and_snapshot() {
         .await
         .unwrap();
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(500);
-    nf_ingest::ingest::sync(&mut client, 1, 100, None, &tx)
-        .await
-        .unwrap();
-    drop(tx);
-
     let mut db = HashTableDb::new();
-    while let Some(event) = rx.recv().await {
-        if let ChainEvent::NewBlock {
-            height,
-            hash,
-            nullifiers,
-            ..
-        } = event
-        {
-            db.insert_block(height, hash, &nullifiers).unwrap();
-        }
-    }
+    sync_into(&mut client, 1, 100, &mut db).await;
     assert_eq!(db.len(), 500);
     assert_eq!(db.latest_height(), Some(100));
 
@@ -170,9 +123,9 @@ async fn test_sync_reorg_rollback_and_snapshot() {
     let mut new_hash_100 = [0u8; 32];
     new_hash_100[0] = 0xBB;
 
-    db.insert_block(99, new_hash_99, &nfs_to_nwms(&replacement_nfs_99))
+    db.insert_block(99, new_hash_99, &replacement_nfs_99)
         .unwrap();
-    db.insert_block(100, new_hash_100, &nfs_to_nwms(&replacement_nfs_100))
+    db.insert_block(100, new_hash_100, &replacement_nfs_100)
         .unwrap();
     assert_eq!(db.len(), 500);
 
@@ -222,24 +175,8 @@ async fn test_eviction_during_sync() {
         .await
         .unwrap();
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(500);
-    nf_ingest::ingest::sync(&mut client, 1, 200, None, &tx)
-        .await
-        .unwrap();
-    drop(tx);
-
     let mut db = HashTableDb::new();
-    while let Some(event) = rx.recv().await {
-        if let ChainEvent::NewBlock {
-            height,
-            hash,
-            nullifiers,
-            ..
-        } = event
-        {
-            db.insert_block(height, hash, &nullifiers).unwrap();
-        }
-    }
+    sync_into(&mut client, 1, 200, &mut db).await;
 
     assert_eq!(db.len(), 2000);
 

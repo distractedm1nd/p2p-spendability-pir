@@ -24,7 +24,7 @@ use witness_client::reconstruct::reconstruct_witness;
 use witness_types::*;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+const IRONWOOD_PROTOCOL: i32 = 2;
 const BATCH_SIZE: u64 = 10_000;
 
 /// Ingest blocks in batches and append commitments to the tree.
@@ -40,7 +40,7 @@ async fn ingest_blocks(client: &mut LwdClient, tree: &mut CommitmentTreeDb, from
             .expect("failed to fetch blocks");
 
         for block in &blocks {
-            let cmx = extract_commitments(block);
+            let cmx = extract_commitments(block).unwrap();
             let mut hash = [0u8; 32];
             let len = block.hash.len().min(32);
             hash[..len].copy_from_slice(&block.hash[..len]);
@@ -63,7 +63,7 @@ async fn build_windowed_tree(
     usize,
 ) {
     let subtree_roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
         .await
         .expect("failed to get subtree roots");
 
@@ -73,7 +73,7 @@ async fn build_windowed_tree(
         "need at least 3 completed shards for this test, got {num_completed}"
     );
 
-    tracing::info!(num_completed, "fetched completed Orchard shard roots");
+    tracing::info!(num_completed, "fetched completed Ironwood shard roots");
 
     // Prefetch all but the last 2 completed shards
     let prefetch_count = num_completed - 2;
@@ -281,6 +281,9 @@ async fn e2e_witness_roundtrip_server() {
 
     let engine_state = engine.setup(&pir_db, &scenario).unwrap();
     let metadata = WitnessMetadata {
+        zcash_network: pir_types::ZcashNetwork::Main,
+        commitment_pool: "ironwood".into(),
+        dataset_version: pir_types::DATASET_VERSION,
         anchor_height,
         tree_size: tree.tree_size(),
         window_start_shard: tree.window_start_shard(),
@@ -290,6 +293,7 @@ async fn e2e_witness_roundtrip_server() {
     };
 
     let config = witness_server::state::ServerConfig {
+        zcash_network: pir_types::ZcashNetwork::Main,
         snapshot_interval: 100,
         data_dir: std::path::PathBuf::from("/tmp/witness-e2e-test"),
         lwd_urls: vec![LWD_ENDPOINT.to_string()],

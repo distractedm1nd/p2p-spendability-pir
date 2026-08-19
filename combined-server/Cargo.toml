@@ -8,30 +8,15 @@ default-run = "spend-server"
 name = "spend-server"
 path = "src/main.rs"
 
-[features]
-default = ["nullifier", "witness"]
-nullifier = [
-    "dep:spend-server",
-    "dep:spend-types",
-    "dep:nf-ingest",
-    "dep:hashtable-pir",
-]
-witness = [
-    "dep:witness-server",
-    "dep:witness-types",
-    "dep:commitment-ingest",
-    "dep:commitment-tree-db",
-]
 [dependencies]
-spend-server = { path = "../nullifier/spend-server", optional = true }
-witness-server = { path = "../witness/witness-server", optional = true }
-spend-types = { path = "../nullifier/spend-types", optional = true }
-witness-types = { path = "../witness/witness-types", optional = true }
+spend-server = { path = "../nullifier/spend-server" }
+witness-server = { path = "../witness/witness-server" }
+spend-types = { path = "../nullifier/spend-types" }
+witness-types = { path = "../witness/witness-types" }
 pir-types = { path = "../shared/pir-types" }
-nf-ingest = { path = "../nullifier/nf-ingest", optional = true }
-commitment-ingest = { path = "../witness/commitment-ingest", optional = true }
-hashtable-pir = { path = "../nullifier/hashtable-pir", optional = true }
-commitment-tree-db = { path = "../witness/commitment-tree-db", optional = true }
+commitment-ingest = { path = "../witness/commitment-ingest" }
+hashtable-pir = { path = "../nullifier/hashtable-pir" }
+commitment-tree-db = { path = "../witness/commitment-tree-db" }
 spendability-pir-zakura = { path = "../zakura-server" }
 zakura = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services", default-features = false }
 zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
@@ -40,12 +25,9 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 rayon = "1.10"
-arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]

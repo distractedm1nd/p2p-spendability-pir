@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use pir_types::{PirEngine, ServerPhase, YpirScenario};
+use pir_types::{PirEngine, ServerPhase, YpirScenario, ZcashNetwork};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -11,6 +11,9 @@ pub const DEFAULT_WINDOW_SHARD_LIMIT: usize = L0_MAX_SHARDS;
 /// Metadata exposed via `/metadata` and attached to PIR state snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WitnessMetadata {
+    pub zcash_network: ZcashNetwork,
+    pub commitment_pool: String,
+    pub dataset_version: u32,
     pub anchor_height: u64,
     pub tree_size: u64,
     pub window_start_shard: u32,
@@ -55,6 +58,7 @@ impl<P: PirEngine> AppState<P> {
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    pub zcash_network: ZcashNetwork,
     pub snapshot_interval: u64,
     pub data_dir: PathBuf,
     pub lwd_urls: Vec<String>,

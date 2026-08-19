@@ -3,28 +3,48 @@ use crate::snapshot_io;
 use crate::state::{AppState, PirState, ServerConfig, WitnessMetadata};
 use axum::routing::{get, post};
 use axum::Router;
+use chain_ingest::{BlockEvent, PipelineError};
 use commitment_tree_db::CommitmentTreeDb;
-use pir_types::{PirEngine, ServerPhase, NU5_MAINNET_ACTIVATION};
+use pir_types::{
+    PirEngine, ServerPhase, ZcashNetwork, CONFIRMATION_DEPTH, DATASET_VERSION, IRONWOOD_POOL,
+};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use witness_types::{WitnessChainEvent, L0_MAX_SHARDS, SHARD_LEAVES};
+use witness_types::{L0_MAX_SHARDS, SHARD_LEAVES};
 
-const ORCHARD_PROTOCOL: i32 = 1;
+const IRONWOOD_PROTOCOL: i32 = 2;
+const FOLLOW_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SNAPSHOT_ARTIFACTS: &[&str] = &["witness_snapshot.bin", "witness_snapshot.bin.tmp"];
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
-    #[error("ingest error: {0}")]
-    Ingest(Box<commitment_ingest::ingest::IngestError>),
+    #[error(transparent)]
+    Pipeline(#[from] PipelineError),
     #[error("snapshot io error: {0}")]
     SnapshotIo(#[from] snapshot_io::SnapshotIoError),
     #[error("pir setup failed: {0}")]
     PirSetup(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("chain client error: {0}")]
-    Client(Box<chain_ingest::ClientError>),
+    #[error(transparent)]
+    Client(#[from] chain_ingest::ClientError),
+    #[error("ingest task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Endpoint(#[from] chain_ingest::EndpointError),
+    #[error(transparent)]
+    Parse(#[from] commitment_ingest::ParseError),
+    #[error(transparent)]
+    Dataset(#[from] chain_ingest::DatasetError),
     #[error("lightwalletd returned no block at height {height} while bootstrapping windowed sync")]
     MissingCompletingBlock { height: u64 },
+    #[error("malformed Ironwood subtree root at index {index}")]
+    InvalidSubtreeRoot { index: usize },
+    #[error("malformed block hash at height {height}")]
+    InvalidBlockHash { height: u64 },
+    #[error("lightwalletd returned height {actual} while requesting completing block {expected}")]
+    WrongCompletingBlockHeight { actual: u64, expected: u64 },
     #[error(
         "{context} tree size mismatch before appending block {height}: expected {expected}, got {actual}"
     )]
@@ -34,18 +54,6 @@ pub enum ServerError {
         expected: u64,
         actual: u64,
     },
-}
-
-impl From<chain_ingest::ClientError> for ServerError {
-    fn from(e: chain_ingest::ClientError) -> Self {
-        ServerError::Client(Box::new(e))
-    }
-}
-
-impl From<commitment_ingest::ingest::IngestError> for ServerError {
-    fn from(e: commitment_ingest::ingest::IngestError) -> Self {
-        ServerError::Ingest(Box::new(e))
-    }
 }
 
 pub type Result<T> = std::result::Result<T, ServerError>;
@@ -67,6 +75,7 @@ pub fn rebuild_pir<P: PirEngine>(
     tree: &mut CommitmentTreeDb,
     scenario: &pir_types::YpirScenario,
     anchor_height: u64,
+    zcash_network: ZcashNetwork,
 ) -> std::result::Result<PirState<P>, ServerError> {
     let total_start = std::time::Instant::now();
 
@@ -81,6 +90,9 @@ pub fn rebuild_pir<P: PirEngine>(
     let setup_ms = setup_start.elapsed().as_millis();
 
     let metadata = WitnessMetadata {
+        zcash_network,
+        commitment_pool: IRONWOOD_POOL.into(),
+        dataset_version: DATASET_VERSION,
         anchor_height,
         tree_size: tree.tree_size(),
         window_start_shard: tree.window_start_shard(),
@@ -113,16 +125,20 @@ pub fn rebuild_pir<P: PirEngine>(
 
 /// Determine the sync start point using GetSubtreeRoots.
 ///
-/// Returns `(CommitmentTreeDb, sync_from_height, initial_tree_size)`.
+/// Returns `(CommitmentTreeDb, sync_from_height)`.
 /// If there are enough completed shards, creates a windowed tree with
-/// prefetched roots and syncs only the window. Otherwise syncs from NU5.
-async fn prepare_tree(
+/// prefetched roots and syncs only the window. Otherwise syncs from NU6.3.
+pub async fn prepare_tree(
     client: &mut chain_ingest::LwdClient,
-    tip_height: u64,
+    target_height: u64,
     window_shard_limit: usize,
-) -> Result<(CommitmentTreeDb, u64, Option<u32>)> {
+    zcash_network: ZcashNetwork,
+) -> Result<(CommitmentTreeDb, u64)> {
     let window_shard_limit = window_shard_limit.clamp(1, L0_MAX_SHARDS);
-    let subtree_roots = client.get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535).await?;
+    let mut subtree_roots = client
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
+        .await?;
+    subtree_roots.retain(|root| root.completing_block_height <= target_height);
     let num_completed = subtree_roots.len();
 
     tracing::info!(
@@ -137,13 +153,19 @@ async fn prepare_tree(
 
         let prefetched: Vec<[u8; 32]> = subtree_roots[..window_start]
             .iter()
-            .map(|sr| {
+            .enumerate()
+            .map(|(index, sr)| {
+                if sr.root_hash.len() != 32 {
+                    return Err(ServerError::InvalidSubtreeRoot { index });
+                }
                 let mut root = [0u8; 32];
-                let len = sr.root_hash.len().min(32);
-                root[..len].copy_from_slice(&sr.root_hash[..len]);
-                root
+                root.copy_from_slice(&sr.root_hash);
+                if !CommitmentTreeDb::is_canonical_hash(&root) {
+                    return Err(ServerError::InvalidSubtreeRoot { index });
+                }
+                Ok(root)
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         let completing_block_height = subtree_roots[window_start - 1].completing_block_height;
         let sync_from = completing_block_height + 1;
@@ -162,15 +184,21 @@ async fn prepare_tree(
             .ok_or(ServerError::MissingCompletingBlock {
                 height: completing_block_height,
             })?;
-        let spillover = completing_block_spillover(block, leaf_offset);
-        if !spillover.is_empty() {
-            let mut hash = [0u8; 32];
-            let len = block.hash.len().min(32);
-            hash[..len].copy_from_slice(&block.hash[..len]);
-            tree.append_commitments(completing_block_height, hash, &spillover);
+        if block.height != completing_block_height {
+            return Err(ServerError::WrongCompletingBlockHeight {
+                actual: block.height,
+                expected: completing_block_height,
+            });
         }
-
-        let initial_tree_size = Some(tree.tree_size() as u32);
+        let spillover = completing_block_spillover(block, leaf_offset)?;
+        let hash = block
+            .hash
+            .as_slice()
+            .try_into()
+            .map_err(|_| ServerError::InvalidBlockHash {
+                height: completing_block_height,
+            })?;
+        tree.append_commitments(completing_block_height, hash, &spillover);
 
         tracing::info!(
             window_start_shard = window_start,
@@ -178,38 +206,37 @@ async fn prepare_tree(
             prefetched_roots = subtree_roots[..window_start].len(),
             sync_from,
             leaf_offset,
-            initial_tree_size,
             "using windowed sync (skipping {} shards)",
             window_start,
         );
 
-        Ok((tree, sync_from, initial_tree_size))
+        Ok((tree, sync_from))
     } else {
-        let floor = min_sync_height(tip_height);
+        let floor = min_sync_height(zcash_network);
         tracing::info!(
             completed_shards = num_completed,
             window_shard_limit,
             sync_from = floor,
-            "full sync from NU5 (fewer than {} completed shards)",
+            "full sync from NU6.3 (fewer than {} completed shards)",
             window_shard_limit,
         );
-        Ok((CommitmentTreeDb::new(), floor, None))
+        Ok((CommitmentTreeDb::new(), floor))
     }
 }
 
 fn completing_block_spillover(
     block: &chain_ingest::proto::CompactBlock,
     leaf_offset: u64,
-) -> Vec<[u8; 32]> {
-    // `orchard_commitment_tree_size` is the cumulative size after this block,
+) -> Result<Vec<[u8; 32]>> {
+    // `ironwood_commitment_tree_size` is the cumulative size after this block,
     // so it tells us how many of this block's commitments landed inside the
     // current window beyond `leaf_offset`.
-    let all = commitment_ingest::parser::extract_commitments(block);
+    let all = commitment_ingest::parser::extract_commitments(block)?;
     let end_tree_size = block
         .chain_metadata
         .as_ref()
-        .map_or(0u64, |m| m.orchard_commitment_tree_size as u64);
-    spillover_from_commitments(&all, end_tree_size, leaf_offset)
+        .map_or(0u64, |m| m.ironwood_commitment_tree_size as u64);
+    Ok(spillover_from_commitments(&all, end_tree_size, leaf_offset))
 }
 
 fn spillover_from_commitments(
@@ -227,7 +254,7 @@ fn spillover_from_commitments(
     commitments[skip..].to_vec()
 }
 
-fn validate_prior_tree_size(
+pub fn validate_prior_tree_size(
     tree: &CommitmentTreeDb,
     height: u64,
     prior_tree_size: Option<u32>,
@@ -263,62 +290,48 @@ fn validate_prior_tree_size(
 }
 
 /// Lowest block height we'll ever sync.
-fn min_sync_height(tip_height: u64) -> u64 {
-    if tip_height >= NU5_MAINNET_ACTIVATION {
-        NU5_MAINNET_ACTIVATION
-    } else {
-        1
-    }
+fn min_sync_height(network: ZcashNetwork) -> u64 {
+    chain_ingest::nu6_3_activation_height(network)
 }
 
 /// Sync a block range into the tree, reporting progress via `phase`.
 pub async fn sync_range(
     lwd_urls: &[String],
+    zcash_network: ZcashNetwork,
     from: u64,
     to: u64,
     tree: &mut CommitmentTreeDb,
-    initial_tree_size: Option<u32>,
     phase: &arc_swap::ArcSwap<ServerPhase>,
 ) -> Result<()> {
     if from > to {
         return Ok(());
     }
 
-    let (tx, mut rx) = mpsc::channel::<WitnessChainEvent>(1000);
-    let sync_handle = {
-        let mut client = chain_ingest::LwdClient::connect(lwd_urls)
-            .await
-            .map_err(commitment_ingest::ingest::IngestError::from)?;
-        let ts = initial_tree_size;
-        tokio::spawn(async move {
-            commitment_ingest::ingest::sync(&mut client, from, to, ts, &tx).await
-        })
-    };
-
-    while let Some(event) = rx.recv().await {
-        if let WitnessChainEvent::NewBlock {
-            height,
-            hash,
-            commitments,
-            prior_tree_size,
-            ..
-        } = event
-        {
-            validate_prior_tree_size(tree, height, prior_tree_size, "initial sync")?;
-            tree.append_commitments(height, hash, &commitments);
-
-            if height % 1000 == 0 {
+    let mut client = chain_ingest::LwdClient::connect(lwd_urls).await?;
+    chain_ingest::require_ironwood_tree_state(&mut client, zcash_network, to).await?;
+    chain_ingest::sync_blocks(&mut client, from, to, |block| {
+        let result = (|| {
+            let commitments = commitment_ingest::extract_commitments(&block.block)?;
+            let prior_tree_size =
+                commitment_ingest::ironwood_prior_tree_size(&block.block, commitments.len())?;
+            validate_prior_tree_size(tree, block.height(), Some(prior_tree_size), "initial sync")?;
+            tree.append_commitments(block.height(), block.hash, &commitments);
+            if block.height() % 1000 == 0 {
                 phase.store(Arc::new(ServerPhase::Syncing {
-                    current_height: height,
+                    current_height: block.height(),
                     target_height: to,
                 }));
-                tracing::info!(height, tree_size = tree.tree_size(), "sync progress");
+                tracing::info!(
+                    height = block.height(),
+                    tree_size = tree.tree_size(),
+                    "sync progress"
+                );
             }
-        }
-    }
-
-    sync_handle.await.ok();
-    Ok(())
+            Ok(())
+        })();
+        std::future::ready(result)
+    })
+    .await
 }
 
 /// Main server entry point. Runs sync mode, transitions to follow mode, serves HTTP.
@@ -341,81 +354,9 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         }
     };
 
-    let mut client = chain_ingest::LwdClient::connect(&config.lwd_urls)
-        .await
-        .map_err(commitment_ingest::ingest::IngestError::from)?;
-
-    let (tip_height, _) = client
-        .get_latest_block()
-        .await
-        .map_err(commitment_ingest::ingest::IngestError::from)?;
-
-    // Try loading from snapshot first
-    let (mut tree, forward_start, initial_tree_size) =
-        match snapshot_io::load_snapshot(&config.data_dir).await {
-            Ok(t) => {
-                let resume = t.latest_height().map(|h| h + 1).unwrap_or(0);
-                let ts = if t.tree_size() > 0 {
-                    Some(t.tree_size() as u32)
-                } else {
-                    None
-                };
-                tracing::info!(
-                    resume_height = resume,
-                    tree_size = t.tree_size(),
-                    leaf_offset = t.leaf_offset(),
-                    "loaded snapshot"
-                );
-                (t, resume, ts)
-            }
-            Err(_) => {
-                // No snapshot — use GetSubtreeRoots for smart sync
-                prepare_tree(
-                    &mut client,
-                    tip_height,
-                    config.effective_window_shard_limit(),
-                )
-                .await?
-            }
-        };
-
-    if forward_start <= tip_height {
-        app_state.phase.store(Arc::new(ServerPhase::Syncing {
-            current_height: forward_start,
-            target_height: tip_height,
-        }));
-        tracing::info!(from = forward_start, to = tip_height, "entering sync mode");
-        sync_range(
-            &config.lwd_urls,
-            forward_start,
-            tip_height,
-            &mut tree,
-            initial_tree_size,
-            &app_state.phase,
-        )
-        .await?;
-    }
-
-    tracing::info!(
-        tree_size = tree.tree_size(),
-        shards = tree.populated_shards(),
-        window_start = tree.window_start_shard(),
-        latest_height = tree.latest_height(),
-        "sync complete",
-    );
-
-    snapshot_io::save_snapshot(&tree, &config.data_dir).await?;
-    tracing::info!("snapshot saved after sync");
-
+    let mut tree = sync_into(app_state.clone()).await?;
     let anchor_height = tree.latest_height().unwrap_or(0);
-    let pir_state = rebuild_pir(&*engine, &mut tree, &app_state.scenario, anchor_height)?;
-    app_state.live_pir.store(Arc::new(Some(pir_state)));
-    app_state.phase.store(Arc::new(ServerPhase::Serving));
     tracing::info!(anchor_height, tree_size = tree.tree_size(), "serving");
-
-    // Save snapshot again after rebuild so warm cache is persisted
-    snapshot_io::save_snapshot(&tree, &config.data_dir).await?;
-    tracing::info!("snapshot saved with warm cache");
 
     let http_handle = match early_http {
         Some(h) => h,
@@ -432,25 +373,31 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
     // Follow mode
     let latest_height = tree.latest_height().unwrap_or(0);
     let latest_hash = tree.latest_block_hash().unwrap_or([0u8; 32]);
-    let follow_tree_size = if tree.tree_size() > 0 {
-        Some(tree.tree_size() as u32)
-    } else {
-        None
-    };
-
-    let (tx, mut rx) = mpsc::channel::<WitnessChainEvent>(100);
+    let (tx, mut rx) = mpsc::channel::<BlockEvent>(100);
     let follow_handle = {
-        let mut follow_client = chain_ingest::LwdClient::connect(&config.lwd_urls)
-            .await
-            .map_err(commitment_ingest::ingest::IngestError::from)?;
-        let ts = follow_tree_size;
+        let mut follow_client = chain_ingest::LwdClient::connect(&config.lwd_urls).await?;
+        chain_ingest::require_ironwood_tree_state(
+            &mut follow_client,
+            config.zcash_network,
+            latest_height,
+        )
+        .await?;
         tokio::spawn(async move {
-            commitment_ingest::ingest::follow(
+            chain_ingest::follow_blocks(
                 &mut follow_client,
                 latest_height,
                 latest_hash,
-                ts,
-                &tx,
+                CONFIRMATION_DEPTH,
+                CONFIRMATION_DEPTH as usize * 2,
+                FOLLOW_POLL_INTERVAL,
+                |event| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send(event)
+                            .await
+                            .map_err(|_| PipelineError::ConsumerDropped)
+                    }
+                },
             )
             .await
         })
@@ -460,31 +407,39 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
 
     while let Some(event) = rx.recv().await {
         match event {
-            WitnessChainEvent::NewBlock {
-                height,
-                hash,
-                commitments,
-                prior_tree_size,
-                ..
-            } => {
-                validate_prior_tree_size(&tree, height, prior_tree_size, "follow mode")?;
-                tree.append_commitments(height, hash, &commitments);
+            BlockEvent::NewBlock(block) => {
+                let commitments = commitment_ingest::extract_commitments(&block.block)?;
+                let prior_tree_size =
+                    commitment_ingest::ironwood_prior_tree_size(&block.block, commitments.len())?;
+                validate_prior_tree_size(
+                    &tree,
+                    block.height(),
+                    Some(prior_tree_size),
+                    "follow mode",
+                )?;
+                tree.append_commitments(block.height(), block.hash, &commitments);
                 blocks_since_snapshot += 1;
                 tracing::info!(
-                    height,
+                    height = block.height(),
                     cmx = commitments.len(),
                     tree_size = tree.tree_size(),
                     "new block"
                 );
             }
-            WitnessChainEvent::Reorg { rollback_to } => {
+            BlockEvent::Reorg { rollback_to } => {
                 tree.rollback_to(rollback_to);
                 tracing::info!(rollback_to, tree_size = tree.tree_size(), "reorg handled");
             }
         }
 
         let anchor_height = tree.latest_height().unwrap_or(0);
-        let pir_state = rebuild_pir(&*engine, &mut tree, &app_state.scenario, anchor_height)?;
+        let pir_state = rebuild_pir(
+            &*engine,
+            &mut tree,
+            &app_state.scenario,
+            anchor_height,
+            config.zcash_network,
+        )?;
         app_state.live_pir.store(Arc::new(Some(pir_state)));
 
         if blocks_since_snapshot >= config.snapshot_interval {
@@ -494,7 +449,7 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         }
     }
 
-    follow_handle.abort();
+    follow_handle.await??;
     http_handle.abort();
     Ok(())
 }
@@ -513,60 +468,69 @@ pub async fn sync_into<P: PirEngine + 'static>(
     app_state: Arc<AppState<P>>,
 ) -> Result<CommitmentTreeDb> {
     let config = app_state.config.clone();
+    chain_ingest::ensure_ironwood_dataset(
+        &config.data_dir,
+        config.zcash_network,
+        SNAPSHOT_ARTIFACTS,
+    )?;
     let engine = app_state.engine.clone();
 
-    let mut client = chain_ingest::LwdClient::connect(&config.lwd_urls)
-        .await
-        .map_err(commitment_ingest::ingest::IngestError::from)?;
+    let mut client = chain_ingest::LwdClient::connect(&config.lwd_urls).await?;
 
-    let (tip_height, _) = client
-        .get_latest_block()
-        .await
-        .map_err(commitment_ingest::ingest::IngestError::from)?;
+    let (tip_height, _) = client.get_latest_block().await?;
+    let target_height = tip_height.saturating_sub(CONFIRMATION_DEPTH);
+    chain_ingest::require_ironwood_tree_state(&mut client, config.zcash_network, target_height)
+        .await?;
 
-    let (mut tree, forward_start, initial_tree_size) =
-        match snapshot_io::load_snapshot(&config.data_dir).await {
-            Ok(t) => {
-                let resume = t.latest_height().map(|h| h + 1).unwrap_or(0);
-                let ts = if t.tree_size() > 0 {
-                    Some(t.tree_size() as u32)
-                } else {
-                    None
-                };
-                (t, resume, ts)
-            }
-            Err(_) => {
-                prepare_tree(
-                    &mut client,
-                    tip_height,
-                    config.effective_window_shard_limit(),
-                )
-                .await?
-            }
-        };
+    let (mut tree, forward_start) = match snapshot_io::load_snapshot(&config.data_dir).await {
+        Ok(t) => {
+            let resume = t
+                .latest_height()
+                .map(|height| height + 1)
+                .unwrap_or_else(|| min_sync_height(config.zcash_network));
+            (t, resume)
+        }
+        Err(snapshot_io::SnapshotIoError::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            prepare_tree(
+                &mut client,
+                target_height,
+                config.effective_window_shard_limit(),
+                config.zcash_network,
+            )
+            .await?
+        }
+        Err(error) => return Err(error.into()),
+    };
 
-    if forward_start <= tip_height {
+    if forward_start <= target_height {
         app_state.phase.store(Arc::new(ServerPhase::Syncing {
             current_height: forward_start,
-            target_height: tip_height,
+            target_height,
         }));
         sync_range(
             &config.lwd_urls,
+            config.zcash_network,
             forward_start,
-            tip_height,
+            target_height,
             &mut tree,
-            initial_tree_size,
             &app_state.phase,
         )
         .await?;
     }
 
-    snapshot_io::save_snapshot(&tree, &config.data_dir).await?;
-
     let anchor_height = tree.latest_height().unwrap_or(0);
-    let pir_state = rebuild_pir(&*engine, &mut tree, &app_state.scenario, anchor_height)?;
+    let pir_state = rebuild_pir(
+        &*engine,
+        &mut tree,
+        &app_state.scenario,
+        anchor_height,
+        config.zcash_network,
+    )?;
     app_state.live_pir.store(Arc::new(Some(pir_state)));
     app_state.phase.store(Arc::new(ServerPhase::Serving));
+    snapshot_io::save_snapshot(&tree, &config.data_dir).await?;
 
     Ok(tree)
 }
@@ -574,39 +538,11 @@ pub async fn sync_into<P: PirEngine + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chain_ingest::proto::{ChainMetadata, CompactBlock, CompactOrchardAction, CompactTx};
-    use witness_types::SHARD_LEAVES;
 
     fn make_leaf(tag: u64) -> [u8; 32] {
         let mut hash = [0u8; 32];
         hash[..8].copy_from_slice(&tag.to_le_bytes());
         hash
-    }
-
-    fn make_action(tag: u64) -> CompactOrchardAction {
-        CompactOrchardAction {
-            nullifier: vec![0; 32],
-            cmx: make_leaf(tag).to_vec(),
-            ephemeral_key: vec![0; 32],
-            ciphertext: vec![0; 52],
-        }
-    }
-
-    fn make_block(height: u64, tags: &[u64], tree_size: u64) -> CompactBlock {
-        CompactBlock {
-            height,
-            hash: vec![height as u8; 32],
-            prev_hash: vec![height.saturating_sub(1) as u8; 32],
-            vtx: vec![CompactTx {
-                actions: tags.iter().copied().map(make_action).collect(),
-                ..Default::default()
-            }],
-            chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: tree_size as u32,
-            }),
-            ..Default::default()
-        }
     }
 
     #[test]
@@ -616,74 +552,6 @@ mod tests {
         let spillover = spillover_from_commitments(&commitments, 6, 4);
 
         assert_eq!(spillover, vec![make_leaf(3), make_leaf(4)]);
-    }
-
-    #[test]
-    fn completing_block_spillover_matches_window_bootstrap_reference_tree() {
-        let spillover_count = 3usize;
-        let next_block_count = 2usize;
-        let first_block_tags: Vec<u64> = (0..(SHARD_LEAVES + spillover_count))
-            .map(|i| i as u64 + 1)
-            .collect();
-        let second_block_tags: Vec<u64> = (0..next_block_count)
-            .map(|i| SHARD_LEAVES as u64 + spillover_count as u64 + i as u64 + 1)
-            .collect();
-
-        let completing_block = make_block(
-            100,
-            &first_block_tags,
-            SHARD_LEAVES as u64 + spillover_count as u64,
-        );
-        let next_block = make_block(
-            101,
-            &second_block_tags,
-            SHARD_LEAVES as u64 + spillover_count as u64 + next_block_count as u64,
-        );
-
-        let spillover = completing_block_spillover(&completing_block, SHARD_LEAVES as u64);
-        let expected_spillover: Vec<_> = first_block_tags
-            .iter()
-            .skip(SHARD_LEAVES)
-            .copied()
-            .map(make_leaf)
-            .collect();
-        assert_eq!(spillover, expected_spillover);
-
-        let completed_shard: Vec<_> = first_block_tags
-            .iter()
-            .take(SHARD_LEAVES)
-            .copied()
-            .map(make_leaf)
-            .collect();
-        let second_block_commitments = commitment_ingest::parser::extract_commitments(&next_block);
-
-        let mut prefetched_tree = CommitmentTreeDb::new();
-        prefetched_tree.append_commitments(99, [0xAA; 32], &completed_shard);
-        let prefetched_root = prefetched_tree.shard_roots()[0].1;
-
-        let mut reference_tree = CommitmentTreeDb::new();
-        reference_tree.append_commitments(
-            completing_block.height,
-            [0x11; 32],
-            &commitment_ingest::parser::extract_commitments(&completing_block),
-        );
-        reference_tree.append_commitments(next_block.height, [0x22; 32], &second_block_commitments);
-
-        let mut windowed_tree =
-            CommitmentTreeDb::with_offset(SHARD_LEAVES as u64, vec![prefetched_root]);
-        windowed_tree.append_commitments(completing_block.height, [0x11; 32], &spillover);
-        windowed_tree.append_commitments(next_block.height, [0x22; 32], &second_block_commitments);
-
-        assert_eq!(
-            windowed_tree.leaves(),
-            &reference_tree.leaves()[SHARD_LEAVES..],
-            "window bootstrap should preserve leaf ordering across the shard boundary"
-        );
-        assert_eq!(
-            windowed_tree.tree_root(),
-            reference_tree.tree_root(),
-            "window bootstrap should match the full reference tree root"
-        );
     }
 
     #[test]

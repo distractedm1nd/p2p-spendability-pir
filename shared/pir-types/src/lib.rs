@@ -5,15 +5,55 @@
 //! constants shared across all PIR services.
 
 use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 
 /// Blocks behind the tip at which the PIR server anchors its database state.
 /// Shared by both nullifier and witness PIR servers. Deep enough (10) to survive
 /// typical reorgs while still being fresh enough for practical spending.
 pub const CONFIRMATION_DEPTH: u64 = 10;
 
-/// Mainnet activation height for NU5 (Orchard). No Orchard data exists below
-/// this height, so PIR ingest starts here.
-pub const NU5_MAINNET_ACTIVATION: u64 = 1_687_104;
+/// Shielded pool represented by newly-created PIR datasets.
+pub const IRONWOOD_POOL: &str = "ironwood";
+
+/// Version of the Ironwood PIR dataset contract.
+pub const DATASET_VERSION: u32 = 2;
+
+/// Zcash network represented by a PIR dataset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZcashNetwork {
+    Main,
+    Test,
+}
+
+impl ZcashNetwork {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Test => "test",
+        }
+    }
+}
+
+impl fmt::Display for ZcashNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ZcashNetwork {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "main" => Ok(Self::Main),
+            "test" => Ok(Self::Test),
+            _ => Err(format!(
+                "unsupported Zcash network {value:?}; expected main or test"
+            )),
+        }
+    }
+}
 
 /// Server lifecycle phase, reported via `/metadata` endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,5 +127,13 @@ mod tests {
         let decoded: YpirScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.num_items, 16_384);
         assert_eq!(decoded.item_size_bits, 28_672);
+    }
+
+    #[test]
+    fn ironwood_dataset_identity_matches_vote_nullifier_pir() {
+        assert_eq!(IRONWOOD_POOL, "ironwood");
+        assert_eq!(DATASET_VERSION, 2);
+        assert_eq!(ZcashNetwork::Main.to_string(), "main");
+        assert_eq!("test".parse(), Ok(ZcashNetwork::Test));
     }
 }

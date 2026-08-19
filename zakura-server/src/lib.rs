@@ -482,10 +482,11 @@ mod tests {
         };
         let spend_scenario = pir_types::YpirScenario {
             num_items: 16_384,
-            item_size_bits: 36_736,
+            item_size_bits: 28_672,
         };
         let witness_state = Arc::new(WitnessState::new(
             witness_server::state::ServerConfig {
+                zcash_network: pir_types::ZcashNetwork::Main,
                 snapshot_interval: 1,
                 data_dir: PathBuf::new(),
                 lwd_urls: vec![],
@@ -496,6 +497,7 @@ mod tests {
         ));
         let spend_state = Arc::new(SpendState::new(
             spend_server::state::ServerConfig {
+                zcash_network: pir_types::ZcashNetwork::Main,
                 target_size: 1,
                 confirmation_depth: 1,
                 snapshot_interval: 1,

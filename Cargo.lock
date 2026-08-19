@@ -782,6 +782,8 @@ version = "0.1.0"
 dependencies = [
  "pir-types",
  "prost 0.13.5",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -917,18 +919,14 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "combined-server"
 version = "0.1.0"
 dependencies = [
- "arc-swap",
  "axum 0.7.9",
  "chain-ingest",
  "clap",
  "commitment-ingest",
  "commitment-tree-db",
  "hashtable-pir",
- "nf-ingest",
  "pir-types",
  "rayon",
- "serde",
- "serde_json",
  "spend-server",
  "spend-types",
  "spendability-pir-zakura",
@@ -950,11 +948,8 @@ name = "commitment-ingest"
 version = "0.1.0"
 dependencies = [
  "chain-ingest",
- "decryption-types",
- "pir-types",
+ "orchard",
  "thiserror 2.0.18",
- "tokio",
- "tracing",
  "witness-types",
 ]
 
@@ -966,7 +961,7 @@ dependencies = [
  "commitment-ingest",
  "hex",
  "incrementalmerkletree",
- "orchard 0.11.0",
+ "orchard",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1073,15 +1068,6 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
-
-[[package]]
-name = "core2"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239fa3ae9b63c2dc74bd3fa852d4792b8b305ae64eeede946265b6af62f1fff3"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "corez"
@@ -1332,15 +1318,6 @@ name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
-
-[[package]]
-name = "decryption-types"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "witness-types",
-]
 
 [[package]]
 name = "der"
@@ -3774,13 +3751,9 @@ version = "0.1.0"
 dependencies = [
  "chain-ingest",
  "hashtable-pir",
- "rand 0.8.5",
- "spend-types",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tonic 0.12.3",
- "tracing",
 ]
 
 [[package]]
@@ -4022,73 +3995,6 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
-
-[[package]]
-name = "orchard"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1ef66fcf99348242a20d582d7434da381a867df8dc155b3a980eca767c56137"
-dependencies = [
- "aes",
- "bitvec",
- "blake2b_simd",
- "core2",
- "ff",
- "fpe",
- "getset",
- "group",
- "halo2_poseidon",
- "hex",
- "incrementalmerkletree",
- "lazy_static",
- "memuse",
- "nonempty",
- "pasta_curves",
- "rand 0.8.5",
- "reddsa",
- "serde",
- "sinsemilla",
- "subtle",
- "tracing",
- "visibility",
- "zcash_note_encryption",
- "zcash_spec",
- "zip32",
-]
-
-[[package]]
-name = "orchard"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a54f8d29bfb1e76a9d4e868a1a08cce2e57dd2bdc66232982822ad3114b91ab3"
-dependencies = [
- "aes",
- "bitvec",
- "blake2b_simd",
- "corez",
- "ff",
- "fpe",
- "getset",
- "group",
- "halo2_poseidon",
- "hex",
- "incrementalmerkletree",
- "lazy_static",
- "memuse",
- "nonempty",
- "pasta_curves",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "reddsa",
- "serde",
- "sinsemilla",
- "subtle",
- "tracing",
- "visibility",
- "zcash_note_encryption",
- "zcash_spec",
- "zip32",
-]
 
 [[package]]
 name = "orchard"
@@ -5129,7 +5035,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
- "tower-http 0.6.8",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -5843,19 +5749,18 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "axum 0.7.9",
+ "chain-ingest",
  "clap",
  "hashtable-pir",
  "nf-ingest",
  "reqwest",
  "serde",
- "serde_json",
  "spend-types",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tonic 0.12.3",
- "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "valar-spiral-rs",
@@ -6594,23 +6499,6 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-util",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
-dependencies = [
- "bitflags",
- "bytes",
- "http",
- "http-body",
- "http-body-util",
- "pin-project-lite",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -7753,7 +7641,7 @@ dependencies = [
  "commitment-tree-db",
  "hex",
  "incrementalmerkletree",
- "orchard 0.14.0",
+ "orchard",
  "pir-types",
  "reqwest",
  "serde",
@@ -7782,11 +7670,9 @@ dependencies = [
  "pir-types",
  "reqwest",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "valar-spiral-rs",
@@ -8021,7 +7907,7 @@ dependencies = [
  "jubjub",
  "lazy_static",
  "num-integer",
- "orchard 0.15.5",
+ "orchard",
  "primitive-types",
  "rand_core 0.6.4",
  "rayon",
@@ -8074,7 +7960,7 @@ dependencies = [
  "metrics",
  "mset",
  "once_cell",
- "orchard 0.15.5",
+ "orchard",
  "rand 0.8.5",
  "rayon",
  "sapling-crypto",
@@ -8202,7 +8088,7 @@ dependencies = [
  "metrics",
  "nix",
  "openrpsee",
- "orchard 0.15.5",
+ "orchard",
  "phf",
  "prost 0.14.4",
  "rand 0.8.5",
@@ -8373,7 +8259,7 @@ dependencies = [
  "group",
  "memuse",
  "nonempty",
- "orchard 0.15.5",
+ "orchard",
  "rand_core 0.6.4",
  "sapling-crypto",
  "secrecy",
@@ -8417,7 +8303,7 @@ dependencies = [
  "jubjub",
  "memuse",
  "nonempty",
- "orchard 0.15.5",
+ "orchard",
  "rand_core 0.6.4",
  "redjubjub",
  "sapling-crypto",

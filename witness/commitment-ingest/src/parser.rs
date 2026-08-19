@@ -1,489 +1,153 @@
-//! Orchard note commitment and decryption data extraction from compact blocks.
-//!
-//! Mirrors the nullifier parser (`nf-ingest/parser.rs`) but extracts `cmx`
-//! (note commitment) values and decryption fields (nf, ephemeral key, ciphertext)
-//! from each `CompactOrchardAction`.
-
 use chain_ingest::proto::{CompactBlock, CompactOrchardAction};
-use decryption_types::DecryptionLeaf;
+use orchard::tree::MerkleHashOrchard;
+use thiserror::Error;
 use witness_types::Hash;
 
-/// Extracted commitments from a single compact block.
-#[derive(Debug, Clone)]
-pub struct BlockCommitments {
-    /// Block height.
-    pub height: u64,
-    /// Block hash.
-    pub hash: [u8; 32],
-    /// Previous block hash.
-    pub prev_hash: [u8; 32],
-    /// Orchard note commitments in transaction-then-action order.
-    pub commitments: Vec<Hash>,
-    /// `orchardCommitmentTreeSize` from the *previous* block's metadata,
-    /// giving the tree size at the start of this block.
-    pub prior_tree_size: Option<u32>,
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ParseError {
+    #[error("Ironwood {field} at height {height} has {actual} bytes; expected {expected}")]
+    InvalidField {
+        height: u64,
+        field: &'static str,
+        actual: usize,
+        expected: usize,
+    },
+    #[error("Ironwood commitment at height {height} is not canonically encoded")]
+    NonCanonicalCommitment { height: u64 },
+    #[error("compact block at height {height} omitted Ironwood tree-size metadata")]
+    MissingTreeSize { height: u64 },
+    #[error("Ironwood tree size {tree_size} at height {height} is smaller than its {commitments} commitments")]
+    InvalidTreeSize {
+        height: u64,
+        tree_size: u32,
+        commitments: usize,
+    },
 }
 
-/// Extract all Orchard note commitments (`cmx`) from a compact block.
-///
-/// Walks all transactions and collects the 32-byte `cmx` from each Orchard
-/// action. Sapling outputs are ignored — the witness system tracks only Orchard.
-pub fn extract_commitments(block: &CompactBlock) -> Vec<Hash> {
-    let mut commitments = Vec::new();
-    for tx in &block.vtx {
-        for action in &tx.actions {
-            if action.cmx.len() == 32 {
-                let mut cmx = [0u8; 32];
-                cmx.copy_from_slice(&action.cmx);
-                commitments.push(cmx);
-            }
-        }
-    }
-    commitments
-}
-
-/// Extract full block commitment data including metadata.
-///
-/// `prev_tree_size` should be the `orchardCommitmentTreeSize` from the
-/// previous block's `ChainMetadata`, if available. For the first block
-/// in a batch, pass `None`.
-pub fn extract_block_commitments(
-    block: &CompactBlock,
-    prev_tree_size: Option<u32>,
-) -> BlockCommitments {
-    let mut hash = [0u8; 32];
-    let len = block.hash.len().min(32);
-    hash[..len].copy_from_slice(&block.hash[..len]);
-
-    let mut prev_hash = [0u8; 32];
-    let len = block.prev_hash.len().min(32);
-    prev_hash[..len].copy_from_slice(&block.prev_hash[..len]);
-
-    BlockCommitments {
-        height: block.height,
-        hash,
-        prev_hash,
-        commitments: extract_commitments(block),
-        prior_tree_size: prev_tree_size,
-    }
-}
-
-/// Get the `orchardCommitmentTreeSize` from a block's chain metadata, if present.
-pub fn orchard_tree_size(block: &CompactBlock) -> Option<u32> {
+pub fn extract_commitments(block: &CompactBlock) -> Result<Vec<Hash>, ParseError> {
     block
+        .vtx
+        .iter()
+        .flat_map(|tx| &tx.ironwood_actions)
+        .map(|action| commitment(block.height, action))
+        .collect()
+}
+
+pub fn ironwood_prior_tree_size(
+    block: &CompactBlock,
+    commitments: usize,
+) -> Result<u32, ParseError> {
+    let tree_size = block
         .chain_metadata
         .as_ref()
-        .map(|m| m.orchard_commitment_tree_size)
-        .filter(|&size| size > 0)
+        .ok_or(ParseError::MissingTreeSize {
+            height: block.height,
+        })?
+        .ironwood_commitment_tree_size;
+    tree_size
+        .checked_sub(commitments.try_into().unwrap_or(u32::MAX))
+        .ok_or(ParseError::InvalidTreeSize {
+            height: block.height,
+            tree_size,
+            commitments,
+        })
 }
 
-/// Extract decryption PIR leaf data from a compact block.
-///
-/// For each valid Orchard action (one with a 32-byte `cmx`), collects the
-/// nullifier, ephemeral key, and first 52 bytes of ciphertext. The output
-/// is 1:1 with [`extract_commitments`] — `decryption_leaves[i]` corresponds
-/// to `commitments[i]` at the same tree position.
-pub fn extract_decryption_leaves(block: &CompactBlock) -> Vec<DecryptionLeaf> {
-    let mut leaves = Vec::new();
-    for tx in &block.vtx {
-        for action in &tx.actions {
-            if action.cmx.len() == 32 {
-                leaves.push(decryption_leaf_from_action(action));
-            }
-        }
+fn commitment(height: u64, action: &CompactOrchardAction) -> Result<Hash, ParseError> {
+    let cmx = field(height, "commitment", &action.cmx)?;
+    if bool::from(MerkleHashOrchard::from_bytes(&cmx).is_some()) {
+        Ok(cmx)
+    } else {
+        Err(ParseError::NonCanonicalCommitment { height })
     }
-    leaves
 }
 
-/// Extract both commitments and decryption leaves in a single pass.
-///
-/// More efficient than calling [`extract_commitments`] and
-/// [`extract_decryption_leaves`] separately when both are needed.
-/// Guarantees 1:1 correspondence between the two output vectors.
-pub fn extract_commitments_and_decryption(
-    block: &CompactBlock,
-) -> (Vec<Hash>, Vec<DecryptionLeaf>) {
-    let mut commitments = Vec::new();
-    let mut leaves = Vec::new();
-    for tx in &block.vtx {
-        for action in &tx.actions {
-            if action.cmx.len() == 32 {
-                let mut cmx = [0u8; 32];
-                cmx.copy_from_slice(&action.cmx);
-                commitments.push(cmx);
-                leaves.push(decryption_leaf_from_action(action));
-            }
-        }
-    }
-    (commitments, leaves)
-}
-
-fn decryption_leaf_from_action(action: &CompactOrchardAction) -> DecryptionLeaf {
-    let mut nf = [0u8; 32];
-    let nf_len = action.nullifier.len().min(32);
-    nf[..nf_len].copy_from_slice(&action.nullifier[..nf_len]);
-
-    let mut ephemeral_key = [0u8; 32];
-    let ek_len = action.ephemeral_key.len().min(32);
-    ephemeral_key[..ek_len].copy_from_slice(&action.ephemeral_key[..ek_len]);
-
-    let mut ciphertext = [0u8; 52];
-    let ct_len = action.ciphertext.len().min(52);
-    ciphertext[..ct_len].copy_from_slice(&action.ciphertext[..ct_len]);
-
-    DecryptionLeaf {
-        nf,
-        ephemeral_key,
-        ciphertext,
-    }
+fn field<const N: usize>(
+    height: u64,
+    name: &'static str,
+    bytes: &[u8],
+) -> Result<[u8; N], ParseError> {
+    bytes.try_into().map_err(|_| ParseError::InvalidField {
+        height,
+        field: name,
+        actual: bytes.len(),
+        expected: N,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chain_ingest::proto::{
-        ChainMetadata, CompactOrchardAction, CompactSaplingOutput, CompactTx,
-    };
+    use chain_ingest::proto::{ChainMetadata, CompactTx};
 
-    fn make_action(cmx_byte: u8, nf_byte: u8) -> CompactOrchardAction {
-        let epk_byte = cmx_byte.wrapping_add(0x80);
-        let ct_byte = nf_byte.wrapping_add(0x80);
+    fn action(byte: u8) -> CompactOrchardAction {
         CompactOrchardAction {
-            nullifier: vec![nf_byte; 32],
-            cmx: vec![cmx_byte; 32],
-            ephemeral_key: vec![epk_byte; 32],
-            ciphertext: vec![ct_byte; 52],
-        }
-    }
-
-    fn make_sapling_output(cmu_byte: u8) -> CompactSaplingOutput {
-        CompactSaplingOutput {
-            cmu: vec![cmu_byte; 32],
-            ephemeral_key: vec![0; 32],
-            ciphertext: vec![0; 52],
+            nullifier: vec![byte; 32],
+            cmx: vec![byte; 32],
+            ephemeral_key: vec![byte; 32],
+            ciphertext: vec![byte; 52],
         }
     }
 
     #[test]
-    fn extract_basic_commitments() {
+    fn extracts_only_strict_ironwood_actions() {
         let block = CompactBlock {
-            height: 100,
-            hash: vec![1; 32],
-            prev_hash: vec![0; 32],
+            height: 10,
             vtx: vec![CompactTx {
-                actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
+                actions: vec![action(1)],
+                ironwood_actions: vec![action(2)],
                 ..Default::default()
             }],
             ..Default::default()
         };
-
-        let cmxs = extract_commitments(&block);
-        assert_eq!(cmxs.len(), 2);
-        assert_eq!(cmxs[0], [0xAA; 32]);
-        assert_eq!(cmxs[1], [0xBB; 32]);
+        let commitments = extract_commitments(&block).unwrap();
+        assert_eq!(commitments, vec![[2; 32]]);
     }
 
     #[test]
-    fn extract_empty_block() {
+    fn rejects_malformed_action() {
+        let mut malformed = action(1);
+        malformed.cmx.pop();
         let block = CompactBlock {
-            height: 100,
-            vtx: vec![],
-            ..Default::default()
-        };
-
-        let cmxs = extract_commitments(&block);
-        assert!(cmxs.is_empty());
-    }
-
-    #[test]
-    fn extract_ignores_sapling() {
-        let block = CompactBlock {
-            height: 100,
+            height: 10,
             vtx: vec![CompactTx {
-                outputs: vec![make_sapling_output(0xCC)],
-                actions: vec![make_action(0xDD, 0x33)],
+                ironwood_actions: vec![malformed],
                 ..Default::default()
             }],
             ..Default::default()
         };
+        assert!(matches!(
+            extract_commitments(&block),
+            Err(ParseError::InvalidField {
+                field: "commitment",
+                actual: 31,
+                ..
+            })
+        ));
 
-        let cmxs = extract_commitments(&block);
-        assert_eq!(cmxs.len(), 1, "should only extract Orchard cmx");
-        assert_eq!(cmxs[0], [0xDD; 32]);
-    }
-
-    #[test]
-    fn extract_multiple_transactions() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![
-                CompactTx {
-                    actions: vec![make_action(0x01, 0xA1)],
-                    ..Default::default()
-                },
-                CompactTx {
-                    actions: vec![make_action(0x02, 0xA2), make_action(0x03, 0xA3)],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let cmxs = extract_commitments(&block);
-        assert_eq!(cmxs.len(), 3);
-        assert_eq!(cmxs[0], [0x01; 32]);
-        assert_eq!(cmxs[1], [0x02; 32]);
-        assert_eq!(cmxs[2], [0x03; 32]);
-    }
-
-    #[test]
-    fn extract_ignores_short_cmx() {
-        let block = CompactBlock {
-            height: 100,
+        let noncanonical = CompactBlock {
+            height: 10,
             vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
-                    nullifier: vec![0; 32],
-                    cmx: vec![0xFF; 16], // too short
-                    ephemeral_key: vec![0; 32],
-                    ciphertext: vec![0; 52],
-                }],
+                ironwood_actions: vec![action(0xff)],
                 ..Default::default()
             }],
             ..Default::default()
         };
-
-        let cmxs = extract_commitments(&block);
-        assert!(cmxs.is_empty());
+        assert!(matches!(
+            extract_commitments(&noncanonical),
+            Err(ParseError::NonCanonicalCommitment { .. })
+        ));
     }
 
     #[test]
-    fn extract_block_commitments_with_metadata() {
+    fn reads_ironwood_tree_size() {
         let block = CompactBlock {
-            height: 200,
-            hash: vec![0xAA; 32],
-            prev_hash: vec![0xBB; 32],
-            vtx: vec![CompactTx {
-                actions: vec![make_action(0xCC, 0x44)],
-                ..Default::default()
-            }],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 1000,
+                ironwood_commitment_tree_size: 42,
+                ..Default::default()
             }),
             ..Default::default()
         };
-
-        let bc = extract_block_commitments(&block, Some(999));
-        assert_eq!(bc.height, 200);
-        assert_eq!(bc.hash, [0xAA; 32]);
-        assert_eq!(bc.prev_hash, [0xBB; 32]);
-        assert_eq!(bc.commitments.len(), 1);
-        assert_eq!(bc.prior_tree_size, Some(999));
-    }
-
-    #[test]
-    fn orchard_tree_size_present() {
-        let block = CompactBlock {
-            chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 5000,
-            }),
-            ..Default::default()
-        };
-        assert_eq!(orchard_tree_size(&block), Some(5000));
-    }
-
-    #[test]
-    fn orchard_tree_size_absent() {
-        let block = CompactBlock {
-            chain_metadata: None,
-            ..Default::default()
-        };
-        assert_eq!(orchard_tree_size(&block), None);
-    }
-
-    #[test]
-    fn orchard_tree_size_zero_treated_as_absent() {
-        let block = CompactBlock {
-            chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 0,
-            }),
-            ..Default::default()
-        };
-        assert_eq!(orchard_tree_size(&block), None);
-    }
-
-    #[test]
-    fn commitment_ordering_matches_action_order() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![
-                CompactTx {
-                    actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
-                    ..Default::default()
-                },
-                CompactTx {
-                    actions: vec![make_action(0x03, 0xA3)],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let cmxs = extract_commitments(&block);
-        assert_eq!(cmxs[0], [0x01; 32]);
-        assert_eq!(cmxs[1], [0x02; 32]);
-        assert_eq!(cmxs[2], [0x03; 32]);
-    }
-
-    // -- Decryption leaf extraction tests --
-
-    #[test]
-    fn extract_decryption_basic() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![CompactTx {
-                actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let leaves = extract_decryption_leaves(&block);
-        assert_eq!(leaves.len(), 2);
-        assert_eq!(leaves[0].nf, [0x11; 32]);
-        assert_eq!(leaves[0].ephemeral_key, [0xAA_u8.wrapping_add(0x80); 32]);
-        assert_eq!(leaves[0].ciphertext, [0x11_u8.wrapping_add(0x80); 52]);
-        assert_eq!(leaves[1].nf, [0x22; 32]);
-    }
-
-    #[test]
-    fn extract_decryption_empty_block() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![],
-            ..Default::default()
-        };
-        assert!(extract_decryption_leaves(&block).is_empty());
-    }
-
-    #[test]
-    fn extract_decryption_ignores_sapling() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![CompactTx {
-                outputs: vec![make_sapling_output(0xCC)],
-                actions: vec![make_action(0xDD, 0x33)],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let leaves = extract_decryption_leaves(&block);
-        assert_eq!(leaves.len(), 1);
-        assert_eq!(leaves[0].nf, [0x33; 32]);
-    }
-
-    #[test]
-    fn extract_decryption_skips_short_cmx() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
-                    nullifier: vec![0x11; 32],
-                    cmx: vec![0xFF; 16],
-                    ephemeral_key: vec![0x22; 32],
-                    ciphertext: vec![0x33; 52],
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        assert!(extract_decryption_leaves(&block).is_empty());
-    }
-
-    #[test]
-    fn combined_extraction_one_to_one() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![
-                CompactTx {
-                    actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
-                    ..Default::default()
-                },
-                CompactTx {
-                    actions: vec![make_action(0x03, 0xA3)],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let (cmxs, leaves) = extract_commitments_and_decryption(&block);
-        assert_eq!(cmxs.len(), leaves.len());
-        assert_eq!(cmxs.len(), 3);
-
-        assert_eq!(cmxs[0], [0x01; 32]);
-        assert_eq!(leaves[0].nf, [0xA1; 32]);
-
-        assert_eq!(cmxs[1], [0x02; 32]);
-        assert_eq!(leaves[1].nf, [0xA2; 32]);
-
-        assert_eq!(cmxs[2], [0x03; 32]);
-        assert_eq!(leaves[2].nf, [0xA3; 32]);
-    }
-
-    #[test]
-    fn combined_matches_separate_extractors() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![
-                CompactTx {
-                    actions: vec![make_action(0x10, 0x20)],
-                    ..Default::default()
-                },
-                CompactTx {
-                    outputs: vec![make_sapling_output(0xFF)],
-                    actions: vec![make_action(0x30, 0x40), make_action(0x50, 0x60)],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let cmxs_separate = extract_commitments(&block);
-        let leaves_separate = extract_decryption_leaves(&block);
-        let (cmxs_combined, leaves_combined) = extract_commitments_and_decryption(&block);
-
-        assert_eq!(cmxs_separate, cmxs_combined);
-        assert_eq!(leaves_separate, leaves_combined);
-    }
-
-    #[test]
-    fn decryption_leaf_pads_short_fields() {
-        let block = CompactBlock {
-            height: 100,
-            vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
-                    nullifier: vec![0xAA; 16],
-                    cmx: vec![0xBB; 32],
-                    ephemeral_key: vec![0xCC; 10],
-                    ciphertext: vec![0xDD; 20],
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let leaves = extract_decryption_leaves(&block);
-        assert_eq!(leaves.len(), 1);
-        let leaf = &leaves[0];
-        assert_eq!(&leaf.nf[..16], &[0xAA; 16]);
-        assert_eq!(&leaf.nf[16..], &[0; 16]);
-        assert_eq!(&leaf.ephemeral_key[..10], &[0xCC; 10]);
-        assert_eq!(&leaf.ephemeral_key[10..], &[0; 22]);
-        assert_eq!(&leaf.ciphertext[..20], &[0xDD; 20]);
-        assert_eq!(&leaf.ciphertext[20..], &[0; 32]);
+        assert_eq!(ironwood_prior_tree_size(&block, 2).unwrap(), 40);
     }
 }

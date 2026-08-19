@@ -142,8 +142,13 @@ impl CompactTxStreamer for MockStreamer {
     ) -> Result<Response<Self::GetMempoolStreamStream>, Status> {
         Err(Status::unimplemented(""))
     }
-    async fn get_tree_state(&self, _: Request<BlockId>) -> Result<Response<TreeState>, Status> {
-        Err(Status::unimplemented(""))
+    async fn get_tree_state(&self, req: Request<BlockId>) -> Result<Response<TreeState>, Status> {
+        Ok(Response::new(TreeState {
+            network: "main".into(),
+            height: req.into_inner().height,
+            ironwood_tree: "00".into(),
+            ..Default::default()
+        }))
     }
     async fn get_latest_tree_state(
         &self,
@@ -241,7 +246,7 @@ fn make_compact_block(
             vec![]
         } else {
             vec![CompactTx {
-                actions,
+                ironwood_actions: actions,
                 ..Default::default()
             }]
         },
@@ -289,6 +294,7 @@ where
     let tmp = tempfile::tempdir().unwrap();
 
     let config = ServerConfig {
+        zcash_network: spend_types::ZcashNetwork::Main,
         target_size: spend_types::TARGET_SIZE,
         confirmation_depth: spend_types::CONFIRMATION_DEPTH,
         snapshot_interval: 100,
@@ -306,21 +312,22 @@ where
     tokio::spawn(async move { axum::serve(listener, router).await });
 
     // Connect SpendClient
-    let client = SpendClient::connect(&format!("http://{http_addr}"))
-        .await
-        .unwrap();
+    let client = SpendClient::connect(
+        &format!("http://{http_addr}"),
+        spend_types::ZcashNetwork::Main,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(client.earliest_height(), 1);
-    assert_eq!(client.latest_height(), 20);
-    assert_eq!(client.metadata().num_nullifiers, 100);
+    assert_eq!(client.latest_height(), 10);
+    assert_eq!(client.metadata().num_nullifiers, 50);
 
     // Test: known nullifier IS spent
     let known_nf = &all_nfs[9][2]; // block 10, third nullifier
-    let meta = client.is_spent(known_nf).await.unwrap();
-    assert!(meta.is_some(), "known nullifier should be spent");
+    assert!(client.is_spent(known_nf).await.unwrap());
 
     // Test: random nullifier is NOT spent
     let absent_nf = make_nf(999_999);
-    let meta = client.is_spent(&absent_nf).await.unwrap();
-    assert!(meta.is_none(), "absent nullifier should not be spent");
+    assert!(!client.is_spent(&absent_nf).await.unwrap());
 }

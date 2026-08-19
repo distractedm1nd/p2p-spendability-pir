@@ -1,6 +1,7 @@
 use arc_swap::ArcSwap;
 use spend_types::{
-    PirEngine, ServerPhase, SpendabilityMetadata, YpirScenario, BUCKET_BYTES, NUM_BUCKETS,
+    PirEngine, ServerPhase, SpendabilityMetadata, YpirScenario, ZcashNetwork, BUCKET_BYTES,
+    NUM_BUCKETS,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -39,6 +40,7 @@ impl<P: PirEngine> AppState<P> {
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    pub zcash_network: ZcashNetwork,
     pub target_size: usize,
     pub confirmation_depth: u64,
     pub snapshot_interval: u64,

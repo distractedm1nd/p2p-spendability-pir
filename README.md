@@ -2,7 +2,7 @@
 
 Private spendability checks for Zcash wallets using single-server Private Information Retrieval (PIR). Two subsystems let a wallet determine note status instantly — privately, with sub-second latency, no sync required.
 
-**Nullifier PIR** — detects spent notes by querying a bucketed hash table of recent Orchard nullifiers via SimplePIR. Prevents stale balances and failed transactions while the wallet is behind.
+**Nullifier PIR** — detects spent notes by querying a bucketed hash table of recent Ironwood nullifiers via SimplePIR.
 
 **Witness PIR** — fetches Merkle authentication paths for newly discovered notes via YPIR, enabling immediate spendability before the local ShardTree is complete.
 
@@ -21,16 +21,16 @@ Both are sync-time accelerators: once the wallet catches up, PIR is unnecessary.
 spendability-pir/
 ├── shared/
 │   ├── pir-types/            # PirEngine trait, YpirScenario, ServerPhase, CONFIRMATION_DEPTH
-│   └── chain-ingest/         # LwdClient, ChainTracker, sync/follow streams
+│   └── chain-ingest/         # Validated chain, dataset, sync/follow streams
 ├── nullifier/
-│   ├── spend-types/          # Constants, hash_to_bucket, ChainEvent, SpendabilityMetadata
+│   ├── spend-types/          # Constants, hash_to_bucket, SpendabilityMetadata
 │   ├── hashtable-pir/        # Bucketed hash table with per-block insert/rollback, snapshots
 │   ├── nf-ingest/            # Compact block parser, nullifier extraction
 │   ├── spend-server/         # Axum HTTP server, YPIR serving, ArcSwap rebuild
 │   └── spend-client/         # SpendClient with is_spent(nf) API
 ├── witness/
 │   ├── witness-types/        # Tree constants, PirWitness, BroadcastData
-│   ├── commitment-ingest/    # Orchard note commitment extraction
+│   ├── commitment-ingest/    # Ironwood note commitment extraction
 │   ├── commitment-tree-db/   # In-memory Merkle tree, sub-shard decomposition
 │   ├── witness-server/       # Axum HTTP server, broadcast + YPIR serving
 │   └── witness-client/       # WitnessClient with get_witness(position) API
@@ -52,9 +52,20 @@ cargo build -p witness-server  # witness server with YPIR
 
 ```bash
 cargo run -p spend-server --release -- \
+    --zcash-network main \
     --lwd-url http://localhost:9067 \
     --data-dir ./data \
     --listen 0.0.0.0:8080
+```
+
+### Run (witness server)
+
+```bash
+cargo run -p witness-server --release -- \
+    --zcash-network main \
+    --lwd-url http://localhost:9067 \
+    --data-dir ./witness-data \
+    --listen 0.0.0.0:8081
 ```
 
 ### Test
