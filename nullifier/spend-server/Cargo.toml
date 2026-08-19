@@ -17,7 +17,7 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
-ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server"] }
+ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server", "rayon"] }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
 
 [dev-dependencies]

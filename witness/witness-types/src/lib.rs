@@ -137,6 +137,12 @@ pub struct FrontierUpdate {
     pub rightmost_nodes: [Hash; TREE_DEPTH],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrontierRange {
+    pub from: u64,
+    pub to: u64,
+}
+
 /// Chain event specific to the witness ingest pipeline.
 #[derive(Debug, Clone)]
 pub enum WitnessChainEvent {

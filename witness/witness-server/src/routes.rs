@@ -4,8 +4,9 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pir_types::{PirEngine, ServerPhase};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
+use witness_types::FrontierRange;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -50,12 +51,6 @@ pub async fn broadcast<P: PirEngine + 'static>(State(state): State<Arc<AppState<
         Some(ps) => Json(&ps.broadcast).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
-}
-
-#[derive(Deserialize)]
-pub struct FrontierRange {
-    from: u64,
-    to: u64,
 }
 
 pub async fn frontier<P: PirEngine + 'static>(

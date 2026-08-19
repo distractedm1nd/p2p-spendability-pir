@@ -8,6 +8,7 @@ use std::{
 use pir_types::{PirEngine, ServerPhase};
 use spend_server::state::AppState as SpendState;
 use witness_server::state::AppState as WitnessState;
+use witness_types::FrontierRange;
 use zakura_network::zakura::{
     Frame, Peer, Service, SinkReject, Stream, StreamMode, ZakuraConnId, ZakuraPeerId,
     LOCAL_MAX_CONTROL_FRAME_BYTES,
@@ -35,6 +36,10 @@ pub enum P2PError {
     SerdeError(String),
     #[error("PIR query failed: {0}")]
     QueryError(String),
+    #[error("invalid frontier range {0}..={1}")]
+    InvalidFrontierRange(u64, u64),
+    #[error("frontier updates for heights {0}..={1} are unavailable")]
+    FrontierUnavailable(u64, u64),
 }
 
 impl From<serde_json::Error> for P2PError {
@@ -96,6 +101,7 @@ pub enum Message {
     WitnessBroadcastReq,
     WitnessParamsReq,
     WitnessQueryReq,
+    WitnessFrontierReq,
 
     HealthRes,
     NullifierMetadataRes,
@@ -105,6 +111,7 @@ pub enum Message {
     WitnessBroadcastRes,
     WitnessParamsRes,
     WitnessQueryRes,
+    WitnessFrontierRes,
 
     ErrRes,
 }
@@ -128,15 +135,17 @@ impl TryFrom<u16> for Message {
             5 => Ok(Self::WitnessBroadcastReq),
             6 => Ok(Self::WitnessParamsReq),
             7 => Ok(Self::WitnessQueryReq),
-            8 => Ok(Self::HealthRes),
-            9 => Ok(Self::NullifierMetadataRes),
-            10 => Ok(Self::NullifierParamsRes),
-            11 => Ok(Self::NullifierQueryRes),
-            12 => Ok(Self::WitnessMetadataRes),
-            13 => Ok(Self::WitnessBroadcastRes),
-            14 => Ok(Self::WitnessParamsRes),
-            15 => Ok(Self::WitnessQueryRes),
-            16 => Ok(Self::ErrRes),
+            8 => Ok(Self::WitnessFrontierReq),
+            9 => Ok(Self::HealthRes),
+            10 => Ok(Self::NullifierMetadataRes),
+            11 => Ok(Self::NullifierParamsRes),
+            12 => Ok(Self::NullifierQueryRes),
+            13 => Ok(Self::WitnessMetadataRes),
+            14 => Ok(Self::WitnessBroadcastRes),
+            15 => Ok(Self::WitnessParamsRes),
+            16 => Ok(Self::WitnessQueryRes),
+            17 => Ok(Self::WitnessFrontierRes),
+            18 => Ok(Self::ErrRes),
             other => Err(P2PError::InvalidMessageType(other)),
         }
     }
@@ -315,6 +324,18 @@ impl P2pPirService {
         Ok(Self::frame(payload, Message::WitnessQueryRes))
     }
 
+    async fn witness_frontier(&self, payload: Vec<u8>) -> Result<Vec<Frame>, P2PError> {
+        let range: FrontierRange = serde_json::from_slice(&payload)?;
+        if range.from > range.to {
+            return Err(P2PError::InvalidFrontierRange(range.from, range.to));
+        }
+        let updates = self
+            .witness_state
+            .frontier_range(range.from, range.to)
+            .ok_or(P2PError::FrontierUnavailable(range.from, range.to))?;
+        Self::to_json_frame(&updates, Message::WitnessFrontierRes)
+    }
+
     async fn forward(&self, frame: Frame) -> Result<Vec<Frame>, SinkReject> {
         if frame.flags != 0 {
             return Err(SinkReject::protocol(format!(
@@ -351,6 +372,7 @@ impl P2pPirService {
             Message::WitnessBroadcastReq => self.witness_broadcast().await,
             Message::WitnessParamsReq => self.witness_params().await,
             Message::WitnessQueryReq => self.witness_query(payload).await,
+            Message::WitnessFrontierReq => self.witness_frontier(payload).await,
             _ => {
                 return Err(SinkReject::protocol(format!(
                     "expected a request message, received {message_type}"
@@ -452,6 +474,7 @@ impl Service for P2pPirService {
 mod tests {
     use super::*;
     use std::{net::SocketAddr, path::PathBuf};
+    use witness_types::{FrontierUpdate, TREE_DEPTH};
 
     #[test]
     fn oversized_payload_is_framed_and_reassembled() {
@@ -506,6 +529,12 @@ mod tests {
             Arc::new(SpendPirEngine::new(&spend_scenario)),
         ));
         witness_state.phase.store(Arc::new(ServerPhase::Serving));
+        witness_state.push_frontier(FrontierUpdate {
+            height: 10,
+            tree_size: 1,
+            root: [1; 32],
+            rightmost_nodes: [[2; 32]; TREE_DEPTH],
+        });
         let service = P2pPirService::new(witness_state, spend_state);
 
         let health = service
@@ -565,5 +594,21 @@ mod tests {
             serde_json::from_slice(&nullifier_params[0].payload).unwrap();
         assert_eq!(scenario.num_items, spend_scenario.num_items);
         assert_eq!(scenario.item_size_bits, spend_scenario.item_size_bits);
+
+        let frontier = service
+            .forward(Frame {
+                message_type: Message::WitnessFrontierReq.into(),
+                flags: 0,
+                payload: serde_json::to_vec(&FrontierRange { from: 10, to: 10 }).unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            frontier[0].message_type,
+            u16::from(Message::WitnessFrontierRes)
+        );
+        let updates: Vec<FrontierUpdate> = serde_json::from_slice(&frontier[0].payload).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].height, 10);
     }
 }

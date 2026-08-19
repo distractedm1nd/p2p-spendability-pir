@@ -241,9 +241,7 @@ impl CommitmentTreeDb {
             self.ss_root_cache[slot] = None;
         }
         let frontier_shard = frontier_slot / SUBSHARDS_PER_SHARD;
-        for root in &mut self.shard_root_cache[frontier_shard.min(L0_MAX_SHARDS)..] {
-            *root = None;
-        }
+        self.shard_root_cache[frontier_shard.min(L0_MAX_SHARDS)..].fill(None);
     }
 
     // ── Leaf / root queries ──────────────────────────────────────────

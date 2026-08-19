@@ -8,6 +8,7 @@ autobins = false
 zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
 spend-server = { path = "../nullifier/spend-server" }
 witness-server = { path = "../witness/witness-server" }
+witness-types = { path = "../witness/witness-types" }
 pir-types = { path = "../shared/pir-types" }
 
 thiserror = "2"

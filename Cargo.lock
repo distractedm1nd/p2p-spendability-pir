@@ -5881,6 +5881,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "witness-server",
+ "witness-types",
  "zakura-network",
 ]
 
@@ -6916,6 +6917,7 @@ dependencies = [
  "log",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
+ "rayon",
  "serde",
  "serde_json",
  "sha1",

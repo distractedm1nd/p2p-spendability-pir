@@ -61,12 +61,8 @@ impl<P: PirEngine> AppState<P> {
             .frontier_updates
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while updates
-            .back()
-            .is_some_and(|last| last.height >= update.height)
-        {
-            updates.pop_back();
-        }
+        let keep = updates.partition_point(|last| last.height < update.height);
+        updates.truncate(keep);
         updates.push_back(update);
         while updates.len() > FRONTIER_HISTORY_LIMIT {
             updates.pop_front();
@@ -78,9 +74,8 @@ impl<P: PirEngine> AppState<P> {
             .frontier_updates
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while updates.back().is_some_and(|update| update.height > height) {
-            updates.pop_back();
-        }
+        let keep = updates.partition_point(|update| update.height <= height);
+        updates.truncate(keep);
     }
 
     /// Return an inclusive, gap-free height range, or `None` when it has been
@@ -100,11 +95,7 @@ impl<P: PirEngine> AppState<P> {
             .filter(|update| (from..=to).contains(&update.height))
             .cloned()
             .collect();
-        (selected.len() == expected
-            && selected
-                .windows(2)
-                .all(|pair| pair[1].height == pair[0].height + 1))
-        .then_some(selected)
+        (selected.len() == expected).then_some(selected)
     }
 }
 

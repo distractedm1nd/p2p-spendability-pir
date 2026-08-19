@@ -348,7 +348,6 @@ async fn run_inner<
 
     // --- Follow loop ---
 
-    // Determine the starting height from whichever subsystem(s) are enabled.
     // Determine the starting height/hash from whichever subsystem(s) are enabled.
     // When both are enabled, catch up the one that's behind first.
     #[cfg(all(feature = "nullifier", feature = "witness"))]
@@ -425,8 +424,6 @@ async fn run_inner<
     let mut blocks_since_snapshot: u64 = 0;
     #[cfg(feature = "witness")]
     let mut witness_blocks_since_pir_rebuild: u64 = 0;
-    #[cfg(feature = "witness")]
-    let mut force_witness_pir_rebuild = false;
     #[cfg(feature = "nullifier")]
     let mut nf_prev_tree_size: Option<u32> = None;
 
@@ -528,8 +525,8 @@ async fn run_inner<
                         if let Some(update) = tree.frontier_update(height) {
                             wit_state.push_frontier(update);
                         }
-                        witness_blocks_since_pir_rebuild += 1;
-                        force_witness_pir_rebuild = true;
+                        witness_blocks_since_pir_rebuild =
+                            witness_server::server::PIR_REBUILD_INTERVAL;
                     }
 
                     current_height = height;
@@ -557,9 +554,7 @@ async fn run_inner<
 
         #[cfg(feature = "witness")]
         {
-            if force_witness_pir_rebuild
-                || witness_blocks_since_pir_rebuild >= witness_server::server::PIR_REBUILD_INTERVAL
-            {
+            if witness_blocks_since_pir_rebuild >= witness_server::server::PIR_REBUILD_INTERVAL {
                 let anchor_height = tree.latest_height().unwrap_or(0);
                 let wit_pir = witness_server::server::rebuild_pir(
                     &*wit_engine,
@@ -570,7 +565,6 @@ async fn run_inner<
                 .map_err(ServerError::Witness)?;
                 wit_state.live_pir.store(Arc::new(Some(wit_pir)));
                 witness_blocks_since_pir_rebuild = 0;
-                force_witness_pir_rebuild = false;
             }
         }
 
