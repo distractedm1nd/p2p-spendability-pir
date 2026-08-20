@@ -6,7 +6,6 @@ use ypir::params::{params_for_scenario_simplepir_with_config, YPIRSPConfig};
 use ypir::serialize::ToBytes;
 
 #[test]
-#[ignore]
 fn witness_4096_degree_roundtrip() {
     let scenario = YpirScenario {
         num_items: L0_DB_ROWS as u64,

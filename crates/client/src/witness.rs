@@ -1,3 +1,8 @@
+use crate::{
+    p2p::{P2pClientError, P2pPirSession},
+    transport::{Operation, PirTransport, TransportError},
+};
+use pir_protocol::p2p::P2PError;
 use pir_protocol::{YpirScenario, ZcashNetwork, DATASET_VERSION, IRONWOOD_POOL};
 use serde::Deserialize;
 use thiserror::Error;
@@ -12,6 +17,8 @@ pub use crate::reconstruct;
 pub enum WitnessClientError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("P2P error: {0}")]
+    P2p(#[from] P2pClientError),
     #[error("server unavailable (503)")]
     ServerUnavailable,
     #[error("invalid params from server: {0}")]
@@ -34,8 +41,7 @@ struct Metadata {
 }
 
 pub struct WitnessClient {
-    http: reqwest::Client,
-    base_url: String,
+    transport: PirTransport,
     #[allow(dead_code)]
     scenario: YpirScenario,
     broadcast: BroadcastData,
@@ -47,17 +53,25 @@ impl WitnessClient {
     /// the PIR client. The broadcast download is ~104 KB and cached for the
     /// lifetime of this client.
     pub async fn connect(url: &str, zcash_network: ZcashNetwork) -> Result<Self> {
-        let t0 = std::time::Instant::now();
-        let base_url = url.trim_end_matches('/').to_string();
-        let http = reqwest::Client::new();
+        Self::connect_with_transport(PirTransport::http(url), zcash_network).await
+    }
 
-        let metadata: Metadata = http
-            .get(format!("{base_url}/metadata"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+    pub async fn connect_p2p(session: P2pPirSession, zcash_network: ZcashNetwork) -> Result<Self> {
+        Self::connect_with_transport(PirTransport::Zakura(session), zcash_network).await
+    }
+
+    async fn connect_with_transport(
+        transport: PirTransport,
+        zcash_network: ZcashNetwork,
+    ) -> Result<Self> {
+        let t0 = std::time::Instant::now();
+        let metadata: Metadata = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessMetadata, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         if metadata.zcash_network != zcash_network
             || metadata.commitment_pool != IRONWOOD_POOL
             || metadata.dataset_version != DATASET_VERSION
@@ -67,13 +81,13 @@ impl WitnessClient {
             ));
         }
 
-        let scenario: YpirScenario = http
-            .get(format!("{base_url}/params"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let scenario: YpirScenario = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessParams, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         if scenario.num_items != L0_DB_ROWS as u64
             || scenario.item_size_bits != (SUBSHARD_ROW_BYTES * 8) as u64
             || scenario.poly_len != YPIR_POLY_LEN
@@ -85,11 +99,13 @@ impl WitnessClient {
         tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "fetched /params");
 
         let t1 = std::time::Instant::now();
-        let broadcast_resp = http.get(format!("{base_url}/broadcast")).send().await?;
-        if broadcast_resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-        let broadcast: BroadcastData = broadcast_resp.error_for_status()?.json().await?;
+        let broadcast: BroadcastData = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessBroadcast, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         tracing::info!(
             elapsed_ms = t1.elapsed().as_millis(),
             broadcast_bytes = serde_json::to_vec(&broadcast).map(|v| v.len()).unwrap_or(0),
@@ -114,7 +130,6 @@ impl WitnessClient {
         );
 
         tracing::info!(
-            base_url,
             total_connect_ms = t0.elapsed().as_millis(),
             anchor_height = broadcast.anchor_height,
             window_start = broadcast.window_start_shard,
@@ -124,8 +139,7 @@ impl WitnessClient {
         );
 
         Ok(Self {
-            http,
-            base_url,
+            transport,
             scenario,
             broadcast,
             ypir_client,
@@ -172,22 +186,11 @@ impl WitnessClient {
         );
 
         let t2 = std::time::Instant::now();
-        let resp = self
-            .http
-            .post(format!("{}/query", self.base_url))
-            .body(query_bytes)
-            .send()
-            .await?;
-
-        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-
-        let response_bytes = resp
-            .error_for_status()
-            .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?
-            .bytes()
-            .await?;
+        let response_bytes = self
+            .transport
+            .request(Operation::WitnessQuery, query_bytes)
+            .await
+            .map_err(map_transport_error)?;
         tracing::info!(
             elapsed_ms = t2.elapsed().as_millis(),
             response_bytes = response_bytes.len(),
@@ -225,17 +228,14 @@ impl WitnessClient {
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).
     pub async fn refresh_broadcast(&mut self) -> Result<()> {
-        let resp = self
-            .http
-            .get(format!("{}/broadcast", self.base_url))
-            .send()
-            .await?;
-
-        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-
-        self.broadcast = resp.error_for_status()?.json().await?;
+        self.broadcast = serde_json::from_slice(
+            &self
+                .transport
+                .request(Operation::WitnessBroadcast, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         Ok(())
     }
 
@@ -245,6 +245,17 @@ impl WitnessClient {
 
     pub fn broadcast(&self) -> &BroadcastData {
         &self.broadcast
+    }
+}
+
+fn map_transport_error(error: TransportError) -> WitnessClientError {
+    match error {
+        TransportError::Http(error) => WitnessClientError::Http(error),
+        TransportError::Unavailable
+        | TransportError::P2p(P2pClientError::Remote(P2PError::ServiceUnavailable)) => {
+            WitnessClientError::ServerUnavailable
+        }
+        TransportError::P2p(error) => WitnessClientError::P2p(error),
     }
 }
 

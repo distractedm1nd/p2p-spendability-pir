@@ -12,14 +12,16 @@ nullifier-pir = { path = "../nullifier" }
 witness-pir = { path = "../witness" }
 ypir = { package = "valar-ypir", version = "=0.2.0", default-features = false }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
-orchard = { version = "0.15", default-features = false }
+orchard = { package = "zakura-orchard", version = "=1.0.0-rc.1", default-features = false }
 incrementalmerkletree = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 thiserror = "2"
 tracing = "0.1"
+zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

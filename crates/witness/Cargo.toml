@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 pir-protocol = { path = "../protocol" }
 serde = { version = "1", features = ["derive"] }
-orchard = { version = "0.15", default-features = false }
+orchard = { package = "zakura-orchard", version = "=1.0.0-rc.1", default-features = false }
 incrementalmerkletree = "0.8"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 thiserror = "2"

@@ -7,7 +7,11 @@ use std::{
 
 use crate::nullifier::state::AppState as SpendState;
 use crate::witness::state::AppState as WitnessState;
-use pir_protocol::{PirEngine, ServerPhase};
+pub use pir_protocol::p2p::{
+    CombinedHealthResponse, Message, P2PError, SubsystemHealth, FRAME_FLAG_MORE, PIR_CAPABILITY,
+    PIR_SERVICE_ID, PIR_STREAM_KIND, PIR_STREAM_VERSION,
+};
+use pir_protocol::{p2p::MessageDecoder, PirEngine};
 use zakura_network::zakura::{
     Frame, Peer, Service, SinkReject, Stream, StreamMode, ZakuraConnId, ZakuraPeerId,
     LOCAL_MAX_CONTROL_FRAME_BYTES,
@@ -17,135 +21,8 @@ pub type SpendPirEngine = crate::pir::YpirPirEngine;
 
 pub type WitnessPirEngine = crate::pir::YpirPirEngine;
 
-// TODO: what is this for?
-pub const PIR_CAPABILITY: u64 = 1 << 16;
-
-/// Request/response stream carrying all spendability PIR operations.
-pub const PIR_STREAM_KIND: u16 = 64;
-pub const PIR_STREAM_VERSION: u16 = 1;
-pub const PIR_SERVICE_ID: &str = "zakura.spendability-pir.v1";
-
-#[derive(thiserror::Error, Debug, serde::Serialize, serde::Deserialize)]
-pub enum P2PError {
-    #[error("invalid message type: {0}")]
-    InvalidMessageType(u16),
-    #[error("service currently unavailable")]
-    ServiceUnavailable,
-    #[error("serde error: {0}")]
-    SerdeError(String),
-    #[error("PIR query failed: {0}")]
-    QueryError(String),
-}
-
-impl From<serde_json::Error> for P2PError {
-    fn from(value: serde_json::Error) -> Self {
-        Self::SerdeError(value.to_string())
-    }
-}
-
-impl From<P2PError> for SinkReject {
-    fn from(value: P2PError) -> Self {
-        SinkReject::protocol(value)
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct CombinedHealthResponse {
-    pub nullifier: SubsystemHealth,
-    pub witness: SubsystemHealth,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct SubsystemHealth {
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_height: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_height: Option<u64>,
-}
-
-impl From<&ServerPhase> for SubsystemHealth {
-    fn from(phase: &ServerPhase) -> Self {
-        match phase {
-            ServerPhase::Serving => Self {
-                phase: "serving".into(),
-                current_height: None,
-                target_height: None,
-            },
-            ServerPhase::Syncing {
-                current_height,
-                target_height,
-            } => Self {
-                phase: "syncing".into(),
-                current_height: Some(*current_height),
-                target_height: Some(*target_height),
-            },
-        }
-    }
-}
-
-/// Spendability PIR wire message types.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u16)]
-pub enum Message {
-    HealthReq,
-    NullifierMetadataReq,
-    NullifierParamsReq,
-    NullifierQueryReq,
-    WitnessMetadataReq,
-    WitnessBroadcastReq,
-    WitnessParamsReq,
-    WitnessQueryReq,
-
-    HealthRes,
-    NullifierMetadataRes,
-    NullifierParamsRes,
-    NullifierQueryRes,
-    WitnessMetadataRes,
-    WitnessBroadcastRes,
-    WitnessParamsRes,
-    WitnessQueryRes,
-
-    ErrRes,
-}
-
-impl From<Message> for u16 {
-    fn from(message: Message) -> Self {
-        message as u16
-    }
-}
-
-impl TryFrom<u16> for Message {
-    type Error = P2PError;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::HealthReq),
-            1 => Ok(Self::NullifierMetadataReq),
-            2 => Ok(Self::NullifierParamsReq),
-            3 => Ok(Self::NullifierQueryReq),
-            4 => Ok(Self::WitnessMetadataReq),
-            5 => Ok(Self::WitnessBroadcastReq),
-            6 => Ok(Self::WitnessParamsReq),
-            7 => Ok(Self::WitnessQueryReq),
-            8 => Ok(Self::HealthRes),
-            9 => Ok(Self::NullifierMetadataRes),
-            10 => Ok(Self::NullifierParamsRes),
-            11 => Ok(Self::NullifierQueryRes),
-            12 => Ok(Self::WitnessMetadataRes),
-            13 => Ok(Self::WitnessBroadcastRes),
-            14 => Ok(Self::WitnessParamsRes),
-            15 => Ok(Self::WitnessQueryRes),
-            16 => Ok(Self::ErrRes),
-            other => Err(P2PError::InvalidMessageType(other)),
-        }
-    }
-}
-
 const FRAME_HEADER_BYTES: usize = 8;
 const FRAME_PAYLOAD_BYTES: usize = LOCAL_MAX_CONTROL_FRAME_BYTES as usize - FRAME_HEADER_BYTES;
-/// Set when another frame continues the current message payload.
-pub const FRAME_FLAG_MORE: u16 = 1;
 const PIR_STREAMS: [Stream; 1] = [Stream {
     kind: PIR_STREAM_KIND,
     version: PIR_STREAM_VERSION,
@@ -153,31 +30,6 @@ const PIR_STREAMS: [Stream; 1] = [Stream {
     capability: PIR_CAPABILITY,
     mode: StreamMode::Ordered,
 }];
-
-#[derive(Default)]
-struct FrameDecoder(Option<Frame>);
-
-impl FrameDecoder {
-    fn push(&mut self, mut frame: Frame) -> Result<Option<Frame>, &'static str> {
-        if frame.flags > FRAME_FLAG_MORE {
-            return Err("unsupported request flags");
-        }
-        let more = frame.flags == FRAME_FLAG_MORE;
-        frame.flags = 0;
-        let Some(message) = &mut self.0 else {
-            if more {
-                self.0 = Some(frame);
-                return Ok(None);
-            }
-            return Ok(Some(frame));
-        };
-        if message.message_type != frame.message_type {
-            return Err("message type changed before the final frame");
-        }
-        message.payload.extend(frame.payload);
-        Ok((!more).then(|| self.0.take().expect("message was set")))
-    }
-}
 
 /// Native Zakura frontend for spendability PIR.
 #[derive(Clone)]
@@ -400,7 +252,7 @@ impl Service for P2pPirService {
 
         let service = self.clone();
         tokio::spawn(async move {
-            let mut decoder = FrameDecoder::default();
+            let mut decoder = MessageDecoder::default();
             'peer: loop {
                 let frame = tokio::select! {
                     _ = service_cancel.cancelled() => break,
@@ -410,8 +262,12 @@ impl Service for P2pPirService {
                     },
                 };
 
-                let frame = match decoder.push(frame) {
-                    Ok(Some(frame)) => frame,
+                let frame = match decoder.push(frame.message_type, frame.flags, frame.payload) {
+                    Ok(Some((message_type, payload))) => Frame {
+                        message_type: message_type.into(),
+                        flags: 0,
+                        payload,
+                    },
                     Ok(None) => continue,
                     Err(_) => {
                         connection_cancel.cancel();
@@ -452,6 +308,27 @@ impl Service for P2pPirService {
 mod tests {
     use super::*;
     use std::{net::SocketAddr, path::PathBuf};
+    use zakura_network::{
+        zakura::{spawn_zakura_endpoint_with_services, CustomService, ZakuraServiceId},
+        Config, P2pStack,
+    };
+
+    #[derive(Debug)]
+    struct NoopService;
+
+    impl Service for NoopService {
+        fn name(&self) -> &'static str {
+            "noop"
+        }
+
+        fn streams(&self) -> &[Stream] {
+            &[]
+        }
+
+        fn add_peer(&self, _peer: Peer) {}
+
+        fn remove_peer(&self, _peer: &ZakuraPeerId, _conn_id: ZakuraConnId) {}
+    }
 
     #[test]
     fn oversized_payload_is_framed_and_reassembled() {
@@ -465,12 +342,24 @@ mod tests {
             .iter()
             .all(|frame| frame.encode(LOCAL_MAX_CONTROL_FRAME_BYTES).is_ok()));
 
-        let mut decoder = FrameDecoder::default();
-        assert!(decoder.push(frames[0].clone()).unwrap().is_none());
-        let decoded = decoder.push(frames[1].clone()).unwrap().unwrap();
-        assert_eq!(decoded.message_type, u16::from(Message::NullifierQueryReq));
-        assert_eq!(decoded.flags, 0);
-        assert_eq!(decoded.payload, payload);
+        let mut decoder = MessageDecoder::default();
+        assert!(decoder
+            .push(
+                frames[0].message_type,
+                frames[0].flags,
+                frames[0].payload.clone()
+            )
+            .unwrap()
+            .is_none());
+        let decoded = decoder
+            .push(
+                frames[1].message_type,
+                frames[1].flags,
+                frames[1].payload.clone(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded, (Message::NullifierQueryReq, payload));
     }
 
     #[tokio::test]
@@ -509,7 +398,9 @@ mod tests {
             },
             Arc::new(SpendPirEngine::new(&spend_scenario)),
         ));
-        witness_state.phase.store(Arc::new(ServerPhase::Serving));
+        witness_state
+            .phase
+            .store(Arc::new(pir_protocol::ServerPhase::Serving));
         let service = P2pPirService::new(witness_state, spend_state);
 
         let health = service
@@ -569,5 +460,104 @@ mod tests {
             serde_json::from_slice(&nullifier_params[0].payload).unwrap();
         assert_eq!(scenario.num_items, spend_scenario.num_items);
         assert_eq!(scenario.item_size_bits, spend_scenario.item_size_bits);
+    }
+
+    #[tokio::test]
+    async fn loopback_client_uses_custom_service_stream() {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let witness_scenario = pir_protocol::YpirScenario {
+            num_items: 4_096,
+            item_size_bits: 65_536,
+            poly_len: 4_096,
+        };
+        let spend_scenario = pir_protocol::YpirScenario {
+            num_items: 16_384,
+            item_size_bits: 28_672,
+            poly_len: 2_048,
+        };
+        let witness_state = Arc::new(WitnessState::new(
+            crate::witness::state::ServerConfig {
+                zcash_network: pir_protocol::ZcashNetwork::Main,
+                snapshot_interval: 1,
+                data_dir: PathBuf::new(),
+                lwd_urls: vec![],
+                listen_addr: addr,
+                window_shard_limit: 16,
+            },
+            Arc::new(WitnessPirEngine::new(&witness_scenario)),
+        ));
+        let spend_state = Arc::new(SpendState::new(
+            crate::nullifier::state::ServerConfig {
+                zcash_network: pir_protocol::ZcashNetwork::Main,
+                target_size: 1,
+                confirmation_depth: 1,
+                snapshot_interval: 1,
+                data_dir: PathBuf::new(),
+                lwd_urls: vec![],
+                listen_addr: addr,
+            },
+            Arc::new(SpendPirEngine::new(&spend_scenario)),
+        ));
+        let server_identity = tempfile::tempdir().unwrap();
+        let client_identity = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            p2p_stack: P2pStack::Zakura,
+            identity_dir: server_identity.path().to_owned(),
+            ..Config::default()
+        };
+        config.zakura.listen_addr = Some(addr);
+        config.zakura.bootstrap_peers.clear();
+        let endpoint = spawn_zakura_endpoint_with_services(
+            &config,
+            |_supervisor, _trace| Arc::new(NoopService),
+            None,
+            vec![CustomService {
+                service: Arc::new(P2pPirService::new(witness_state, spend_state)),
+                provides: vec![ZakuraServiceId::new(PIR_SERVICE_ID).unwrap()],
+                seeks: vec![],
+            }],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let node_addr = endpoint.node_addr().await;
+        let direct = node_addr
+            .direct_addresses()
+            .find(|address| address.ip().is_loopback())
+            .unwrap();
+        let (client_node, client) = spendability_pir_client::P2pPirNode::spawn(
+            client_identity.path().to_owned(),
+            vec![format!("{}@{direct}", node_addr.node_id)],
+            pir_protocol::ZcashNetwork::Main,
+        )
+        .await
+        .unwrap();
+        let session = tokio::time::timeout(std::time::Duration::from_secs(10), client.session())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let health: CombinedHealthResponse =
+            serde_json::from_slice(&session.request(Message::HealthReq, vec![]).await.unwrap())
+                .unwrap();
+        assert_eq!(health.nullifier.phase, "syncing");
+        let params: pir_protocol::YpirScenario = serde_json::from_slice(
+            &session
+                .request(Message::WitnessParamsReq, vec![])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(params.poly_len, witness_scenario.poly_len);
+
+        client_node.shutdown().await;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            session.request(Message::HealthReq, vec![])
+        )
+        .await
+        .unwrap()
+        .is_err());
+        endpoint.shutdown().await;
     }
 }
