@@ -10,7 +10,7 @@ live = []
 pir-protocol = { path = "../protocol" }
 nullifier-pir = { path = "../nullifier" }
 witness-pir = { path = "../witness" }
-ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false }
+ypir = { package = "valar-ypir", version = "=0.2.0", default-features = false }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
 orchard = { version = "0.15", default-features = false }
 incrementalmerkletree = "0.8"

@@ -1,7 +1,7 @@
 use arc_swap::ArcSwap;
 use nullifier_pir::{
     PirEngine, ServerPhase, SpendabilityMetadata, YpirScenario, ZcashNetwork, BUCKET_BYTES,
-    NUM_BUCKETS,
+    NUM_BUCKETS, YPIR_POLY_LEN,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -31,6 +31,7 @@ impl<P: PirEngine> AppState<P> {
             scenario: YpirScenario {
                 num_items: NUM_BUCKETS as u64,
                 item_size_bits: (BUCKET_BYTES * 8) as u64,
+                poly_len: YPIR_POLY_LEN,
             },
             engine,
             config,

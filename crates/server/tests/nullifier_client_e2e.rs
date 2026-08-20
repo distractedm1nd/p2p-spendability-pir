@@ -1,4 +1,4 @@
-use nullifier_pir::{PirEngine, YpirScenario, NUM_BUCKETS};
+use nullifier_pir::{PirEngine, YpirScenario, NUM_BUCKETS, YPIR_POLY_LEN};
 use spendability_pir_client::nullifier::SpendClient;
 use spendability_pir_server::ingest::proto::compact_tx_streamer_server::{
     CompactTxStreamer, CompactTxStreamerServer,
@@ -268,6 +268,7 @@ fn scenario() -> YpirScenario {
     YpirScenario {
         num_items: NUM_BUCKETS as u64,
         item_size_bits: (nullifier_pir::BUCKET_BYTES * 8) as u64,
+        poly_len: YPIR_POLY_LEN,
     }
 }
 

@@ -7,10 +7,10 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 use nullifier_pir::TARGET_SIZE;
-use nullifier_pir::{BUCKET_BYTES, NUM_BUCKETS};
+use nullifier_pir::{BUCKET_BYTES, NUM_BUCKETS, YPIR_POLY_LEN as NF_YPIR_POLY_LEN};
 use spendability_pir_server::pir::YpirPirEngine as NfPirEngine;
 use spendability_pir_server::pir::YpirPirEngine as WitPirEngine;
-use witness_pir::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
+use witness_pir::{L0_DB_ROWS, SUBSHARD_ROW_BYTES, YPIR_POLY_LEN as WIT_YPIR_POLY_LEN};
 
 use spendability_pir_server::p2p::{P2pPirService, PIR_SERVICE_ID};
 use spendability_pir_server::server::{create_app_states, run_with_states_until};
@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let nf_scenario = YpirScenario {
             num_items: NUM_BUCKETS as u64,
             item_size_bits: (BUCKET_BYTES * 8) as u64,
+            poly_len: NF_YPIR_POLY_LEN,
         };
         let engine = NfPirEngine::new(&nf_scenario);
         Arc::new(engine)
@@ -100,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let wit_scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+            poly_len: WIT_YPIR_POLY_LEN,
         };
         let engine = WitPirEngine::new(&wit_scenario);
         Arc::new(engine)

@@ -1,5 +1,5 @@
 use nullifier_pir::{
-    hash_to_bucket, PirEngine, YpirScenario, BUCKET_BYTES, ENTRY_BYTES, NUM_BUCKETS,
+    hash_to_bucket, PirEngine, YpirScenario, BUCKET_BYTES, ENTRY_BYTES, NUM_BUCKETS, YPIR_POLY_LEN,
 };
 use spendability_pir_server::pir::YpirPirEngine;
 use ypir::client::YPIRClient;
@@ -9,6 +9,7 @@ fn scenario() -> YpirScenario {
     YpirScenario {
         num_items: NUM_BUCKETS as u64,
         item_size_bits: (BUCKET_BYTES * 8) as u64,
+        poly_len: YPIR_POLY_LEN,
     }
 }
 

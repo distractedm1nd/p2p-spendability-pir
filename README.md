@@ -57,11 +57,11 @@ cargo test --workspace --release
 
 |                | Nullifier PIR | Witness PIR |
 |----------------|---------------|-------------|
-| PIR database   | ~56 MB        | ~64 MB      |
-| Rebuild time   | ~3s           | ~3.5s       |
-| Query latency  | ~65ms         | ~96ms       |
-| Upload         | 672 KB        | 605 KB      |
-| Download       | 12 KB         | 36 KB       |
+| PIR database   | ~56 MB        | 32 MiB      |
+| Rebuild time   | ~3s           | benchmark pending |
+| Query latency  | ~65ms         | benchmark pending |
+| Upload         | 672 KB        | benchmark pending |
+| Download       | 12 KB         | benchmark pending |
 
 ## License
 

@@ -13,6 +13,7 @@ pub const BUCKET_CAPACITY: usize = 112;
 pub const ENTRY_BYTES: usize = 32;
 pub const BUCKET_BYTES: usize = BUCKET_CAPACITY * ENTRY_BYTES;
 pub const DB_BYTES: usize = NUM_BUCKETS * BUCKET_BYTES;
+pub const YPIR_POLY_LEN: usize = 2_048;
 
 pub fn hash_to_bucket(nf: &Nullifier) -> u32 {
     u32::from_le_bytes(nf[..4].try_into().unwrap()) % NUM_BUCKETS as u32

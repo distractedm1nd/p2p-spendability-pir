@@ -72,7 +72,7 @@ pub struct CommitmentTreeDb {
     prefetched_shard_roots: Vec<Hash>,
     /// Cached sub-shard roots indexed by local sub-shard position within the
     /// window. `ss_root_cache[i]` = `Some(root)` if clean, `None` if dirty.
-    /// Length is always [`L0_DB_ROWS`] (8,192).
+    /// Length is always [`L0_DB_ROWS`] (4,096).
     ss_root_cache: Vec<Option<Hash>>,
 }
 
@@ -327,7 +327,7 @@ impl CommitmentTreeDb {
     ///
     /// Iterates each sub-shard's leaves once, writing them into the PIR
     /// database and simultaneously computing sub-shard roots + shard roots.
-    /// This avoids the O(8192 × 256) redundant Sinsemilla hashing that
+    /// This avoids the O(4096 × 256) redundant Sinsemilla hashing that
     /// separate `build_pir_db()` + `broadcast_data()` calls would incur.
     pub fn build_pir_db_and_broadcast(&mut self, anchor_height: u64) -> (Vec<u8>, BroadcastData) {
         let window_start = self.window_start_shard();

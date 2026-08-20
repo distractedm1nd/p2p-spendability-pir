@@ -477,12 +477,14 @@ mod tests {
     async fn health_and_params_are_available_before_pir_setup() {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let witness_scenario = pir_protocol::YpirScenario {
-            num_items: 8_192,
+            num_items: 4_096,
             item_size_bits: 65_536,
+            poly_len: 4_096,
         };
         let spend_scenario = pir_protocol::YpirScenario {
             num_items: 16_384,
             item_size_bits: 28_672,
+            poly_len: 2_048,
         };
         let witness_state = Arc::new(WitnessState::new(
             crate::witness::state::ServerConfig {
@@ -491,7 +493,7 @@ mod tests {
                 data_dir: PathBuf::new(),
                 lwd_urls: vec![],
                 listen_addr: addr,
-                window_shard_limit: 32,
+                window_shard_limit: 16,
             },
             Arc::new(WitnessPirEngine::new(&witness_scenario)),
         ));

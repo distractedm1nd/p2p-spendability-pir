@@ -32,7 +32,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 arc-swap = "1"
 orchard = { version = "0.15", default-features = false }
-ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server"] }
+ypir = { package = "valar-ypir", version = "=0.2.0", default-features = false, features = ["server"] }
 spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
 
 [build-dependencies]

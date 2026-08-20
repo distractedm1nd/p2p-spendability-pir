@@ -29,14 +29,17 @@ pub const SHARD_LEAVES: usize = 1 << SHARD_HEIGHT; // 65,536
 /// Number of bytes per sub-shard PIR row (256 leaves x 32 bytes).
 pub const SUBSHARD_ROW_BYTES: usize = SUBSHARD_LEAVES * 32; // 8,192
 
-/// Padded PIR database row count for L0 (32 shards x 256 sub-shards).
-pub const L0_DB_ROWS: usize = 8_192;
+/// Maximum number of shards in the active PIR window.
+pub const L0_MAX_SHARDS: usize = 16;
+
+/// PIR database row count (16 shards x 256 sub-shards).
+pub const L0_DB_ROWS: usize = L0_MAX_SHARDS * SUBSHARDS_PER_SHARD; // 4,096
 
 /// L0 PIR database size in bytes.
-pub const L0_DB_BYTES: usize = L0_DB_ROWS * SUBSHARD_ROW_BYTES; // 64 MB
+pub const L0_DB_BYTES: usize = L0_DB_ROWS * SUBSHARD_ROW_BYTES; // 32 MiB
 
-/// Maximum number of shards in L0 before eviction/tiering.
-pub const L0_MAX_SHARDS: usize = 32;
+/// YPIR RLWE polynomial degree used by the witness database.
+pub const YPIR_POLY_LEN: usize = 4_096;
 
 /// Raw 32-byte hash used throughout the witness system.
 /// Represents a Sinsemilla hash (Orchard `MerkleHashOrchard`) in serialized form.
@@ -135,9 +138,10 @@ mod tests {
         assert_eq!(SUBSHARDS_PER_SHARD, 256);
         assert_eq!(SHARD_LEAVES, 65_536);
         assert_eq!(SUBSHARD_ROW_BYTES, 8_192);
-        assert_eq!(L0_DB_ROWS, 8_192);
-        assert_eq!(L0_DB_BYTES, 64 * 1024 * 1024);
-        assert_eq!(L0_MAX_SHARDS, 32);
+        assert_eq!(L0_DB_ROWS, 4_096);
+        assert_eq!(L0_DB_BYTES, 32 * 1024 * 1024);
+        assert_eq!(L0_MAX_SHARDS, 16);
+        assert_eq!(YPIR_POLY_LEN, 4_096);
         assert_eq!(L0_MAX_SHARDS * SUBSHARDS_PER_SHARD, L0_DB_ROWS);
     }
 

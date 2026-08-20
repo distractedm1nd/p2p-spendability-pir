@@ -35,7 +35,7 @@ use tokio::net::TcpListener;
 use witness_pir::CommitmentTreeDb;
 use witness_pir::*;
 use ypir::client::YPIRClient;
-use ypir::params::params_for_scenario_simplepir;
+use ypir::params::{params_for_scenario_simplepir_with_config, YPIRSPConfig};
 use ypir::serialize::ToBytes;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
@@ -235,7 +235,11 @@ async fn query_server_row(
         row_bounds(position, broadcast.window_start_shard);
     let row_idx = physical_row_index(shard_idx, subshard_idx, broadcast.window_start_shard);
 
-    let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+    let params = params_for_scenario_simplepir_with_config(
+        scenario.num_items,
+        scenario.item_size_bits,
+        YPIRSPConfig::for_poly_len(scenario.poly_len),
+    );
     let ypir_client = YPIRClient::new(&params);
     let (query, seed) = ypir_client.generate_query_simplepir(row_idx);
     let query_bytes = query.to_bytes();
@@ -322,6 +326,7 @@ async fn full_pir_round_trip() {
     let scenario = YpirScenario {
         num_items: L0_DB_ROWS as u64,
         item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+        poly_len: YPIR_POLY_LEN,
     };
     let engine = Arc::new(YpirPirEngine::new(&scenario));
 

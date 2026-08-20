@@ -3,7 +3,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use witness_pir::*;
 use ypir::client::YPIRClient;
-use ypir::params::params_for_scenario_simplepir;
+use ypir::params::{params_for_scenario_simplepir_with_config, YPIRSPConfig};
 use ypir::serialize::ToBytes;
 
 pub use crate::reconstruct;
@@ -76,6 +76,7 @@ impl WitnessClient {
             .await?;
         if scenario.num_items != L0_DB_ROWS as u64
             || scenario.item_size_bits != (SUBSHARD_ROW_BYTES * 8) as u64
+            || scenario.poly_len != YPIR_POLY_LEN
         {
             return Err(WitnessClientError::InvalidParams(
                 "unexpected Ironwood witness PIR geometry".into(),
@@ -97,13 +98,18 @@ impl WitnessClient {
 
         let t2 = std::time::Instant::now();
         let ypir_client = {
-            let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+            let params = params_for_scenario_simplepir_with_config(
+                scenario.num_items,
+                scenario.item_size_bits,
+                YPIRSPConfig::for_poly_len(scenario.poly_len),
+            );
             YPIRClient::new(&params)
         };
         tracing::info!(
             elapsed_ms = t2.elapsed().as_millis(),
             num_items = scenario.num_items,
             item_size_bits = scenario.item_size_bits,
+            poly_len = scenario.poly_len,
             "PIR client initialized",
         );
 

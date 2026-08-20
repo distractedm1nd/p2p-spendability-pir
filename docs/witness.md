@@ -29,16 +29,16 @@ activation height, serves only confirmed blocks, and rejects malformed hashes,
 commitments, action fields, tree sizes, ranges, and old/unlabelled snapshots.
 
 This contract follows ZIP 229, ZIP 258, `orchard` 0.15, and the current
-`lightwallet-protocol` definitions. Ironwood reuses Orchard-protocol crypto; it
-does not reuse Orchard-pool state.
+`lightwallet-protocol` definitions.
 
-## PIR geometry
+## PIR Params
 
 - Shard: 65,536 leaves
 - Subshard: 256 leaves
 - Row: 8,192 bytes
-- Active window: up to 32 shards / 8,192 rows
-- Database: 64 MiB
+- Active window: up to 16 shards / 4,096 rows
+- Database: 32 MiB
+- YPIR: 0.2.0, polynomial degree 4,096
 
 ## Run
 

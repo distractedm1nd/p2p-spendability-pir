@@ -277,6 +277,7 @@ async fn e2e_witness_roundtrip_server() {
     let scenario = YpirScenario {
         num_items: L0_DB_ROWS as u64,
         item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+        poly_len: YPIR_POLY_LEN,
     };
 
     let engine_state = engine.setup(&pir_db, &scenario).unwrap();

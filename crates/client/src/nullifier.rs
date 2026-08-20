@@ -1,10 +1,10 @@
 use nullifier_pir::{
     hash_to_bucket, Nullifier, SpendabilityMetadata, YpirScenario, ZcashNetwork, BUCKET_BYTES,
-    ENTRY_BYTES,
+    ENTRY_BYTES, NUM_BUCKETS, YPIR_POLY_LEN,
 };
 use thiserror::Error;
 use ypir::client::YPIRClient;
-use ypir::params::params_for_scenario_simplepir;
+use ypir::params::{params_for_scenario_simplepir_with_config, YPIRSPConfig};
 use ypir::serialize::ToBytes;
 
 #[derive(Error, Debug)]
@@ -49,15 +49,21 @@ impl SpendClient {
             .await?;
 
         validate_metadata(&metadata, zcash_network)?;
-        if scenario.item_size_bits != (BUCKET_BYTES * 8) as u64 {
+        if scenario.num_items != NUM_BUCKETS as u64
+            || scenario.item_size_bits != (BUCKET_BYTES * 8) as u64
+            || scenario.poly_len != YPIR_POLY_LEN
+        {
             return Err(SpendClientError::InvalidParams(format!(
-                "expected {} item bits, got {}",
-                BUCKET_BYTES * 8,
-                scenario.item_size_bits
+                "unexpected Ironwood nullifier PIR scenario: {} rows, {} item bits, degree {}",
+                scenario.num_items, scenario.item_size_bits, scenario.poly_len
             )));
         }
 
-        let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+        let params = params_for_scenario_simplepir_with_config(
+            scenario.num_items,
+            scenario.item_size_bits,
+            YPIRSPConfig::for_poly_len(scenario.poly_len),
+        );
         let ypir_client = YPIRClient::new(&params);
         Ok(Self {
             http,

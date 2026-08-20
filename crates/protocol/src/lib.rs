@@ -74,6 +74,8 @@ pub struct YpirScenario {
     pub num_items: u64,
     /// Size of each row in bits.
     pub item_size_bits: u64,
+    /// RLWE polynomial degree.
+    pub poly_len: usize,
 }
 
 /// Abstraction over the PIR engine, allowing stub implementations for testing
@@ -122,11 +124,17 @@ mod tests {
         let scenario = YpirScenario {
             num_items: 16_384,
             item_size_bits: 28_672,
+            poly_len: 4_096,
         };
         let json = serde_json::to_string(&scenario).unwrap();
         let decoded: YpirScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.num_items, 16_384);
         assert_eq!(decoded.item_size_bits, 28_672);
+        assert_eq!(decoded.poly_len, 4_096);
+        assert!(serde_json::from_str::<YpirScenario>(
+            r#"{"num_items":16384,"item_size_bits":28672}"#
+        )
+        .is_err());
     }
 
     #[test]

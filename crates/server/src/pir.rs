@@ -2,7 +2,9 @@ use pir_protocol::{PirEngine, YpirScenario};
 use spiral_rs::params::Params;
 use std::io::Cursor;
 use thiserror::Error;
-use ypir::params::{params_for_scenario_simplepir, DbRowsCols, PtModulusBits};
+use ypir::params::{
+    params_for_scenario_simplepir_with_config, DbRowsCols, PtModulusBits, YPIRSPConfig,
+};
 use ypir::serialize::{FilePtIter, OfflinePrecomputedValues};
 use ypir::server::YServer;
 
@@ -32,9 +34,10 @@ pub struct YpirPirEngine {
 
 impl YpirPirEngine {
     pub fn new(scenario: &YpirScenario) -> Self {
-        let params = Box::leak(Box::new(params_for_scenario_simplepir(
+        let params = Box::leak(Box::new(params_for_scenario_simplepir_with_config(
             scenario.num_items,
             scenario.item_size_bits,
+            YPIRSPConfig::for_poly_len(scenario.poly_len),
         )));
         debug_assert_eq!(scenario.item_size_bits % 8, 0);
         Self {
@@ -90,5 +93,24 @@ impl PirEngine for YpirPirEngine {
                 .unwrap_or("unknown panic");
             YpirError::Query(msg.to_string())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use witness_pir::{L0_DB_ROWS, SUBSHARD_ROW_BYTES, YPIR_POLY_LEN};
+
+    #[test]
+    fn witness_uses_4096_degree_layout() {
+        let engine = YpirPirEngine::new(&YpirScenario {
+            num_items: L0_DB_ROWS as u64,
+            item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+            poly_len: YPIR_POLY_LEN,
+        });
+
+        assert_eq!(engine.params().poly_len, 4_096);
+        assert_eq!(engine.params().db_rows(), 4_096);
+        assert_eq!(engine.params().instances, 2);
     }
 }

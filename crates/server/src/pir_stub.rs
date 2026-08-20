@@ -57,7 +57,7 @@ impl PirEngine for StubPirEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use witness_pir::{L0_DB_BYTES, L0_DB_ROWS, SUBSHARD_ROW_BYTES};
+    use witness_pir::{L0_DB_BYTES, L0_DB_ROWS, SUBSHARD_ROW_BYTES, YPIR_POLY_LEN};
 
     #[test]
     fn stub_setup_and_query() {
@@ -65,6 +65,7 @@ mod tests {
         let scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+            poly_len: YPIR_POLY_LEN,
         };
 
         let mut db = vec![0u8; L0_DB_BYTES];
@@ -85,6 +86,7 @@ mod tests {
         let scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+            poly_len: YPIR_POLY_LEN,
         };
         let db = vec![0u8; L0_DB_BYTES];
         let state = engine.setup(&db, &scenario).unwrap();
@@ -97,6 +99,7 @@ mod tests {
         let scenario = YpirScenario {
             num_items: L0_DB_ROWS as u64,
             item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+            poly_len: YPIR_POLY_LEN,
         };
         let db = vec![0u8; L0_DB_BYTES];
         let state = engine.setup(&db, &scenario).unwrap();

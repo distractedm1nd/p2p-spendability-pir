@@ -49,6 +49,7 @@ impl<P: PirEngine> AppState<P> {
             scenario: YpirScenario {
                 num_items: L0_DB_ROWS as u64,
                 item_size_bits: (SUBSHARD_ROW_BYTES * 8) as u64,
+                poly_len: YPIR_POLY_LEN,
             },
             engine,
             config,
