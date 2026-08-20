@@ -1,9 +1,0 @@
-[package]
-name = "hashtable-pir"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-spend-types = { path = "../spend-types" }
-thiserror = "2"
-xxhash-rust = { version = "0.8", features = ["xxh64"] }

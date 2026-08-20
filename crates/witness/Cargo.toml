@@ -1,0 +1,17 @@
+[package]
+name = "witness-pir"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pir-protocol = { path = "../protocol" }
+serde = { version = "1", features = ["derive"] }
+orchard = { version = "0.15", default-features = false }
+incrementalmerkletree = "0.8"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"

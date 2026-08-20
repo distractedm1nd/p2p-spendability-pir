@@ -1,0 +1,46 @@
+[package]
+name = "spendability-pir-server"
+version = "0.1.0"
+edition = "2021"
+default-run = "spend-server"
+
+[[bin]]
+name = "spend-server"
+path = "src/main.rs"
+
+[features]
+live = []
+
+[dependencies]
+pir-protocol = { path = "../protocol" }
+nullifier-pir = { path = "../nullifier" }
+witness-pir = { path = "../witness" }
+zakura = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services", default-features = false }
+zakura-network = { git = "https://github.com/distractedm1nd/zakura", branch = "custom-services" }
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+prost = "0.13"
+rayon = "1.10"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arc-swap = "1"
+orchard = { version = "0.15", default-features = false }
+ypir = { package = "valar-ypir", version = "=0.1.4", default-features = false, features = ["server"] }
+spiral-rs = { package = "valar-spiral-rs", version = "0.5" }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+spendability-pir-client = { path = "../client" }
+reqwest = { version = "0.12", features = ["json"] }
+tempfile = "3"
+hex = "0.4"
+incrementalmerkletree = "0.8"

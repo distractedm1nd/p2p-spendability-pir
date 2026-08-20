@@ -10,33 +10,22 @@ Both are sync-time accelerators: once the wallet catches up, PIR is unnecessary.
 
 ## Documentation
 
-- [Nullifier PIR](nullifier/README.md) — hash table design, server architecture, client protocol, parameters
-- [Witness PIR](witness/README.md) — tree decomposition, broadcast + PIR tiers, witness reconstruction
+- [Nullifier PIR](docs/nullifier.md) — hash table design, server architecture, client protocol, parameters
+- [Witness PIR](docs/witness.md) — tree decomposition, broadcast + PIR tiers, witness reconstruction
 - [Wallet Integration](docs/pir_wallet_integration.md) — FFI contracts, database schema, feature flags, spendability gates
-- [Zakura P2P Node](zakura-server/README.md) — embedded `zakurad`, native request/response protocol, deployment
+- [Zakura P2P Node](docs/p2p.md) — embedded `zakurad`, native request/response protocol, deployment
 
 ## Workspace
 
 ```
 spendability-pir/
-├── shared/
-│   ├── pir-types/            # PirEngine trait, YpirScenario, ServerPhase, CONFIRMATION_DEPTH
-│   └── chain-ingest/         # Validated chain, dataset, sync/follow streams
-├── nullifier/
-│   ├── spend-types/          # Constants, hash_to_bucket, SpendabilityMetadata
-│   ├── hashtable-pir/        # Bucketed hash table with per-block insert/rollback, snapshots
-│   ├── nf-ingest/            # Compact block parser, nullifier extraction
-│   ├── spend-server/         # Axum HTTP server, YPIR serving, ArcSwap rebuild
-│   └── spend-client/         # SpendClient with is_spent(nf) API
-├── witness/
-│   ├── witness-types/        # Tree constants, PirWitness, BroadcastData
-│   ├── commitment-ingest/    # Ironwood note commitment extraction
-│   ├── commitment-tree-db/   # In-memory Merkle tree, sub-shard decomposition
-│   ├── witness-server/       # Axum HTTP server, broadcast + YPIR serving
-│   └── witness-client/       # WitnessClient with get_witness(position) API
-├── combined-server/          # Owns shared AppStates; normal YPIR binary hosts HTTP + Zakura
-├── zakura-server/            # Native Zakura PIR transport library
-└── proto/                    # Shared protobuf definitions
+├── crates/
+│   ├── protocol/             # Shared client/server wire contracts
+│   ├── nullifier/            # Nullifier types, hash table, snapshots
+│   ├── witness/              # Witness types, commitment tree, snapshots
+│   ├── client/               # Nullifier and witness wallet clients
+│   └── server/               # Ingest, HTTP, P2P, and the spend-server binary
+└── proto/                    # Protobuf definitions used by server ingest
 ```
 
 ## Quick Start
@@ -44,28 +33,17 @@ spendability-pir/
 ### Build
 
 ```bash
-cargo build -p spend-server    # nullifier server with YPIR
-cargo build -p witness-server  # witness server with YPIR
+cargo build -p spendability-pir-server --release
 ```
 
-### Run (nullifier server)
+### Run
 
 ```bash
-cargo run -p spend-server --release -- \
+cargo run -p spendability-pir-server --release -- \
     --zcash-network main \
     --lwd-url http://localhost:9067 \
     --data-dir ./data \
     --listen 0.0.0.0:8080
-```
-
-### Run (witness server)
-
-```bash
-cargo run -p witness-server --release -- \
-    --zcash-network main \
-    --lwd-url http://localhost:9067 \
-    --data-dir ./witness-data \
-    --listen 0.0.0.0:8081
 ```
 
 ### Test

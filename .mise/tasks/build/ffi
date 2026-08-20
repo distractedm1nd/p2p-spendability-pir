@@ -61,8 +61,8 @@ needs_build=true
 if [ -n "$RUST_TRIPLE" ] && [ -f "$BUILT_LIB" ]; then
     newer_src=$(find \
         "$SDK_DIR/rust/src" \
-        "$DIR/nullifier/spend-client/src" \
-        "$DIR/nullifier/spend-types/src" \
+        "$DIR/crates/client/src" \
+        "$DIR/crates/nullifier/src" \
         -name '*.rs' -newer "$BUILT_LIB" 2>/dev/null | head -1)
     if [ -z "$newer_src" ]; then
         needs_build=false

@@ -1,20 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "shared/pir-types",
-    "shared/chain-ingest",
-    "nullifier/spend-types",
-    "nullifier/hashtable-pir",
-    "nullifier/nf-ingest",
-    "nullifier/spend-server",
-    "nullifier/spend-client",
-    "witness/witness-types",
-    "witness/commitment-ingest",
-    "witness/commitment-tree-db",
-    "witness/witness-server",
-    "witness/witness-client",
-    "combined-server",
-    "zakura-server",
+    "crates/protocol",
+    "crates/nullifier",
+    "crates/witness",
+    "crates/client",
+    "crates/server",
 ]
 
 [profile.release]

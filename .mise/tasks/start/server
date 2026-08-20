@@ -41,11 +41,11 @@ LISTEN="${LISTEN:-0.0.0.0:8080}"
 
 # ── Build + run ──────────────────────────────────────────────────
 printf '\033[36mBuilding spend-server (release)...\033[0m\n'
-cargo build -p spend-server --release --manifest-path "$DIR/Cargo.toml"
+cargo build -p spendability-pir-server --release --manifest-path "$DIR/Cargo.toml"
 printf '\033[32mBuild complete.\033[0m\n'
 
 printf '\033[36mStarting spend-server on %s (lwd: %s)\033[0m\n' "$LISTEN" "$LWD_URL"
-exec cargo run -p spend-server --release --manifest-path "$DIR/Cargo.toml" -- \
+exec cargo run -p spendability-pir-server --release --manifest-path "$DIR/Cargo.toml" -- \
     --lwd-url "$LWD_URL" \
     --data-dir "$DATA_DIR" \
     --listen "$LISTEN" \

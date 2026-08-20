@@ -1,6 +1,6 @@
 # Deploy setup
 
-This guide covers deployment for the **combined PIR server** (`pir-server`), which runs both nullifier and witness PIR in a single process. Standalone `spend-server` and `witness-server` binaries are also available if you only need one subsystem.
+This guide covers `spend-server`, which runs nullifier and witness PIR in one process.
 
 Two deployment paths:
 
@@ -23,7 +23,7 @@ Two deployment paths:
 
 ## Binary setup (operators)
 
-This path is for operators who want to run `pir-server` without cloning the repository or installing the Rust toolchain.
+This path is for operators who want to run `spend-server` without cloning the repository or installing the Rust toolchain.
 
 ### 1. Download the binary
 
@@ -34,21 +34,21 @@ Grab the latest release from GitHub:
 PLATFORM="linux-amd64"   # or: linux-arm64, darwin-arm64
 VERSION=$(curl -s https://api.github.com/repos/valargroup/spendability-pir/releases/latest | grep tag_name | cut -d'"' -f4)
 
-sudo mkdir -p /opt/pir-server
-cd /opt/pir-server
+sudo mkdir -p /opt/spend-server
+cd /opt/spend-server
 
 # Download the binary and systemd unit
-curl -fLO "https://github.com/valargroup/spendability-pir/releases/download/${VERSION}/pir-server-${PLATFORM}"
-curl -fLO "https://github.com/valargroup/spendability-pir/releases/download/${VERSION}/pir-server.service"
+curl -fLO "https://github.com/valargroup/spendability-pir/releases/download/${VERSION}/spend-server-${PLATFORM}"
+curl -fLO "https://github.com/valargroup/spendability-pir/releases/download/${VERSION}/spend-server.service"
 
-sudo mv "pir-server-${PLATFORM}" pir-server
-sudo chmod +x pir-server
+sudo mv "spend-server-${PLATFORM}" spend-server
+sudo chmod +x spend-server
 ```
 
 ### 2. Create the data directory
 
 ```bash
-sudo mkdir -p /opt/pir-server/data
+sudo mkdir -p /opt/spend-server/data
 ```
 
 The server creates `nullifier/` and `witness/` subdirectories automatically.
@@ -56,16 +56,16 @@ The server creates `nullifier/` and `witness/` subdirectories automatically.
 ### 3. Install the systemd service
 
 ```bash
-sudo cp /opt/pir-server/pir-server.service /etc/systemd/system/
+sudo cp /opt/spend-server/spend-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable pir-server
-sudo systemctl start pir-server
+sudo systemctl enable spend-server
+sudo systemctl start spend-server
 ```
 
 Verify the service is running:
 
 ```bash
-sudo systemctl status pir-server
+sudo systemctl status spend-server
 curl http://localhost:8080/health
 ```
 
@@ -116,7 +116,7 @@ In the repo: **Settings -> Secrets and variables -> Actions**, add:
 
 **Systemd service**
 
-The `pir-server` binary runs both nullifier and witness PIR in a single process. It needs:
+The `spend-server` binary runs both nullifier and witness PIR in a single process. It needs:
 
 - **lightwalletd endpoint**: Configured via `--lwd-url` (default in the service file: `https://us.zec.stardust.rest:443`).
 - **Data directory**: For snapshots, configured via `--data-dir`. The server creates `nullifier/` and `witness/` subdirectories.
@@ -133,7 +133,7 @@ sudo systemctl start spend-server
 
 **Caddy reverse proxy**
 
-Caddy handles TLS termination and reverse-proxies HTTPS traffic to `pir-server` on `localhost:8080`. Install Caddy once on the remote host:
+Caddy handles TLS termination and reverse-proxies HTTPS traffic to `spend-server` on `localhost:8080`. Install Caddy once on the remote host:
 
 ```bash
 sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
@@ -170,11 +170,6 @@ make run
 # Or run with custom lightwalletd endpoint
 make run LWD_URL=http://localhost:9067
 
-# Build/run individual servers if needed
-make build-nullifier
-make run-nullifier
-make build-witness
-make run-witness
 ```
 
 Then check `http://localhost:8080/health`.
@@ -188,14 +183,3 @@ The workflows in `.github/workflows/` handle building and deploying:
 - **`ci.yml`** — Runs format checks, clippy, and tests on every push/PR to `main`.
 - **`deploy.yml`** — Builds on every push to `main` and deploys to a remote host via SSH.
 - **`release.yml`** — Builds multi-platform binaries and publishes a GitHub Release on version tags.
-
----
-
-## Migrating from spend-server to pir-server
-
-If you're running the standalone `spend-server` and want to switch to the combined `pir-server`:
-
-1. Stop the old service: `sudo systemctl stop spend-server`
-2. Move existing nullifier snapshots: `sudo mkdir -p /opt/pir-server/data/nullifier && sudo mv /opt/spend-server/data/snapshot.bin /opt/pir-server/data/nullifier/`
-3. Install the new binary and service file as described above.
-4. The witness subsystem will sync from scratch on first start (takes a few minutes with subtree root acceleration).

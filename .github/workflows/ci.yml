@@ -27,15 +27,21 @@ jobs:
         with:
           filters: |
             shared:
-              - 'shared/**'
+              - 'crates/protocol/**'
+              - 'crates/server/**'
               - 'proto/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
             nullifier:
-              - 'nullifier/**'
+              - 'crates/nullifier/**'
+              - 'crates/client/src/nullifier.rs'
+              - 'crates/server/src/nullifier/**'
             witness:
-              - 'witness/**'
+              - 'crates/witness/**'
+              - 'crates/client/src/witness.rs'
+              - 'crates/client/src/reconstruct.rs'
+              - 'crates/server/src/witness/**'
             code:
               - '**/*.rs'
               - '**/*.toml'
@@ -80,15 +86,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: >-
-          cargo test
-          -p pir-types
-          -p chain-ingest
-          -p spend-types
-          -p hashtable-pir
-          -p nf-ingest
-          -p spend-server
-          -p spend-client
+      - run: cargo test --workspace --lib
 
   test-witness:
     name: Test (witness)
@@ -111,15 +109,7 @@ jobs:
       # which hit mainnet lightwalletd and take minutes. Those run in test-tree-correctness.
       - name: Unit tests (witness crates)
         run: >-
-          cargo test
-          -p pir-types
-          -p chain-ingest
-          -p witness-types
-          -p commitment-ingest
-          -p commitment-tree-db
-          -p witness-server
-          -p witness-client
-          --lib
+          cargo test --workspace --lib
 
   test-tree-correctness:
     name: Test (tree correctness)
@@ -142,8 +132,7 @@ jobs:
       - name: Verify shard root against mainnet
         run: >-
           cargo test
-          -p commitment-tree-db
-          -p witness-server
+          -p spendability-pir-server
           --test tree_correctness
           --release
           -- --nocapture
@@ -168,7 +157,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: /tmp/pir-test-snapshot
-          key: pir-snapshot-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'witness/witness-server/src/server.rs', 'witness/witness-server/src/state.rs', 'witness/witness-server/tests/pir_round_trip.rs') }}
+          key: pir-snapshot-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/server/src/witness/server.rs', 'crates/server/src/witness/state.rs', 'crates/server/tests/witness_pir_round_trip.rs') }}
           restore-keys: pir-snapshot-v2-${{ runner.os }}-
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -177,8 +166,8 @@ jobs:
       - name: PIR round-trip test
         run: >-
           cargo test
-          -p witness-server
-          --test pir_round_trip
+          -p spendability-pir-server
+          --test witness_pir_round_trip
           --release
           -- --nocapture
 

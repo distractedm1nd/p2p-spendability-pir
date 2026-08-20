@@ -58,7 +58,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.platform }}-spend-server-
 
       - name: Build release binary
-        run: cargo build --release -p combined-server
+        run: cargo build --release -p spendability-pir-server
         env:
           RUSTFLAGS: ${{ contains(matrix.platform, 'amd64') && '-C target-feature=+avx512f' || '' }}
 

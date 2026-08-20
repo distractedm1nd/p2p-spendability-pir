@@ -1,3 +1,3 @@
 [toolchain]
-# Required by the sibling Zakura checkout used by zakura-server.
+# Required by the Zakura dependencies used by the server crate.
 channel = "stable"

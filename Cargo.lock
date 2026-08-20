@@ -777,22 +777,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chain-ingest"
-version = "0.1.0"
-dependencies = [
- "pir-types",
- "prost 0.13.5",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tonic 0.12.3",
- "tonic-build 0.12.3",
- "tracing",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -914,61 +898,6 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
-
-[[package]]
-name = "combined-server"
-version = "0.1.0"
-dependencies = [
- "axum 0.7.9",
- "chain-ingest",
- "clap",
- "commitment-ingest",
- "commitment-tree-db",
- "hashtable-pir",
- "pir-types",
- "rayon",
- "spend-server",
- "spend-types",
- "spendability-pir-zakura",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "valar-spiral-rs",
- "valar-ypir",
- "witness-server",
- "witness-types",
- "zakura",
- "zakura-network",
-]
-
-[[package]]
-name = "commitment-ingest"
-version = "0.1.0"
-dependencies = [
- "chain-ingest",
- "orchard",
- "thiserror 2.0.18",
- "witness-types",
-]
-
-[[package]]
-name = "commitment-tree-db"
-version = "0.1.0"
-dependencies = [
- "chain-ingest",
- "commitment-ingest",
- "hex",
- "incrementalmerkletree",
- "orchard",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "witness-types",
- "xxhash-rust",
-]
 
 [[package]]
 name = "config"
@@ -2225,15 +2154,6 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
-]
-
-[[package]]
-name = "hashtable-pir"
-version = "0.1.0"
-dependencies = [
- "spend-types",
- "thiserror 2.0.18",
- "xxhash-rust",
 ]
 
 [[package]]
@@ -3746,17 +3666,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nf-ingest"
-version = "0.1.0"
-dependencies = [
- "chain-ingest",
- "hashtable-pir",
- "tokio",
- "tokio-stream",
- "tonic 0.12.3",
-]
-
-[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3812,6 +3721,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nullifier-pir"
+version = "0.1.0"
+dependencies = [
+ "pir-protocol",
+ "serde",
+ "thiserror 2.0.18",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -4289,7 +4208,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pir-types"
+name = "pir-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -5723,69 +5642,58 @@ dependencies = [
 ]
 
 [[package]]
-name = "spend-client"
+name = "spendability-pir-client"
 version = "0.1.0"
 dependencies = [
- "axum 0.7.9",
- "hashtable-pir",
- "nf-ingest",
- "reqwest",
- "serde_json",
- "spend-server",
- "spend-types",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tonic 0.12.3",
- "tracing",
- "valar-spiral-rs",
- "valar-ypir",
-]
-
-[[package]]
-name = "spend-server"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "axum 0.7.9",
- "chain-ingest",
  "clap",
- "hashtable-pir",
- "nf-ingest",
+ "hex",
+ "incrementalmerkletree",
+ "nullifier-pir",
+ "orchard",
+ "pir-protocol",
  "reqwest",
  "serde",
- "spend-types",
- "tempfile",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
- "tonic 0.12.3",
  "tracing",
  "tracing-subscriber",
  "valar-spiral-rs",
  "valar-ypir",
+ "witness-pir",
 ]
 
 [[package]]
-name = "spend-types"
+name = "spendability-pir-server"
 version = "0.1.0"
 dependencies = [
- "pir-types",
- "serde",
-]
-
-[[package]]
-name = "spendability-pir-zakura"
-version = "0.1.0"
-dependencies = [
- "pir-types",
+ "arc-swap",
+ "axum 0.7.9",
+ "clap",
+ "hex",
+ "incrementalmerkletree",
+ "nullifier-pir",
+ "orchard",
+ "pir-protocol",
+ "prost 0.13.5",
+ "rayon",
+ "reqwest",
  "serde",
  "serde_json",
- "spend-server",
+ "spendability-pir-client",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "witness-server",
+ "tokio-stream",
+ "tokio-util",
+ "tonic 0.12.3",
+ "tonic-build 0.12.3",
+ "tracing",
+ "tracing-subscriber",
+ "valar-spiral-rs",
+ "valar-ypir",
+ "witness-pir",
+ "zakura",
  "zakura-network",
 ]
 
@@ -7631,63 +7539,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "witness-client"
+name = "witness-pir"
 version = "0.1.0"
 dependencies = [
- "axum 0.7.9",
- "chain-ingest",
- "clap",
- "commitment-ingest",
- "commitment-tree-db",
  "hex",
  "incrementalmerkletree",
  "orchard",
- "pir-types",
- "reqwest",
+ "pir-protocol",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
  "tracing",
- "tracing-subscriber",
- "valar-spiral-rs",
- "valar-ypir",
- "witness-server",
- "witness-types",
-]
-
-[[package]]
-name = "witness-server"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "axum 0.7.9",
- "chain-ingest",
- "clap",
- "commitment-ingest",
- "commitment-tree-db",
- "hex",
- "pir-types",
- "reqwest",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "valar-spiral-rs",
- "valar-ypir",
- "witness-client",
- "witness-types",
-]
-
-[[package]]
-name = "witness-types"
-version = "0.1.0"
-dependencies = [
- "pir-types",
- "serde",
- "serde_json",
+ "xxhash-rust",
 ]
 
 [[package]]

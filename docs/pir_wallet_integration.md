@@ -98,7 +98,7 @@ Swift SDK / app
 
 | Repository | Role | Key PIR code |
 |---|---|---|
-| `spendability-pir` | PIR servers and client libraries | `nullifier/spend-client/`, `nullifier/spend-types/`, `witness/witness-client/`, `witness/witness-types/` |
+| `spendability-pir` | PIR server and client library | `crates/server/`, `crates/client/`, `crates/nullifier/`, `crates/witness/` |
 | `zcash-swift-wallet-sdk` | Rust FFI and Swift orchestration | `rust/src/spendability.rs`, `rust/src/witness.rs`, `rust/src/lib.rs`, `Sources/ZcashLightClientKit/Synchronizer/SDKSynchronizer.swift` |
 | `zcash_client_sqlite` | Wallet DB integration | `src/wallet/spendability_pir.rs`, `src/wallet/common.rs`, `src/wallet.rs` |
 | `zcash_client_backend` | Transaction construction fallback | `src/data_api/wallet.rs` |
@@ -328,9 +328,7 @@ One Rust feature is the main integration toggle:
 ## Dependency Graph
 
 ```text
-spendability-pir/spend-client  ----+
-                                   +--> zcash-swift-wallet-sdk/rust (libzcashlc)
-spendability-pir/witness-client ---+
+spendability-pir/crates/client ---> zcash-swift-wallet-sdk/rust (libzcashlc)
                                               |
                                               v
                                       zcash_client_sqlite
