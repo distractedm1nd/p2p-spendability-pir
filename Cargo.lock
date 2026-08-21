@@ -5657,6 +5657,7 @@ dependencies = [
  "prost 0.13.5",
  "rayon",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "spendability-pir-client",
