@@ -30,25 +30,28 @@ pub fn reconstruct_witness(
     let mut siblings = [[0u8; 32]; TREE_DEPTH];
 
     let leaves = parse_leaves(decoded_row)?;
-    extract_siblings(&leaves, leaf_idx as usize, 0, &mut siblings);
+    extract_siblings(
+        &leaves,
+        leaf_idx as usize,
+        SUBSHARD_HEIGHT,
+        0,
+        &mut siblings,
+    );
 
     let shard_offset = (shard_idx - broadcast.window_start_shard) as usize;
     let ss_roots = &broadcast.subshard_roots[shard_offset].roots;
     extract_siblings(
         ss_roots,
         subshard_idx as usize,
+        SUBSHARD_HEIGHT,
         SUBSHARD_HEIGHT as u8,
         &mut siblings,
     );
 
-    let total_cap_slots = 1usize << SHARD_HEIGHT;
-    let mut padded_cap = Vec::with_capacity(total_cap_slots);
-    padded_cap.extend_from_slice(&broadcast.cap.shard_roots);
-    let empty_shard_root = empty_root(SHARD_HEIGHT as u8);
-    padded_cap.resize(total_cap_slots, empty_shard_root);
     extract_siblings(
-        &padded_cap,
+        &broadcast.cap.shard_roots,
         shard_idx as usize,
+        SHARD_HEIGHT,
         SHARD_HEIGHT as u8,
         &mut siblings,
     );
@@ -63,16 +66,15 @@ pub fn reconstruct_witness(
     })
 }
 
-/// Given a complete array of 2^k nodes at a given base_level, extract the
-/// sibling subtree roots along the path to `index` and place them into
-/// `siblings[base_level..base_level + k]`.
+/// Extract sibling roots from a populated tree prefix, treating the remaining
+/// nodes in the fixed-depth tree as empty.
 fn extract_siblings(
     nodes: &[Hash],
     index: usize,
+    num_levels: usize,
     base_level: u8,
     siblings: &mut [Hash; TREE_DEPTH],
 ) {
-    let num_levels = nodes.len().trailing_zeros() as usize;
     let mut current_nodes = nodes.to_vec();
     let mut idx = index;
 
@@ -85,7 +87,7 @@ fn extract_siblings(
             empty_root(tree_level as u8)
         };
 
-        let mut next = Vec::with_capacity(current_nodes.len() / 2);
+        let mut next = Vec::with_capacity(current_nodes.len().div_ceil(2));
         for pair in current_nodes.chunks(2) {
             let left = pair[0];
             let right = if pair.len() > 1 {
@@ -222,7 +224,7 @@ mod tests {
         let empty_leaf = empty_root(0);
         let leaves = vec![empty_leaf; 4];
         let mut siblings = [[0u8; 32]; TREE_DEPTH];
-        extract_siblings(&leaves, 0, 0, &mut siblings);
+        extract_siblings(&leaves, 0, 2, 0, &mut siblings);
         assert_eq!(
             siblings[0], empty_leaf,
             "level 0 sibling of leaf 0 is leaf 1"
@@ -232,5 +234,19 @@ mod tests {
             empty_root(1),
             "level 1 sibling is root of pair (2,3)"
         );
+    }
+
+    #[test]
+    fn sparse_siblings_match_dense_empty_padding() {
+        let nodes = vec![empty_root(0), empty_root(1), empty_root(2)];
+        let mut dense_nodes = nodes.clone();
+        dense_nodes.resize(8, empty_root(0));
+        let mut dense = [[0u8; 32]; TREE_DEPTH];
+        let mut sparse = dense;
+
+        extract_siblings(&dense_nodes, 1, 3, 0, &mut dense);
+        extract_siblings(&nodes, 1, 3, 0, &mut sparse);
+
+        assert_eq!(sparse[..3], dense[..3]);
     }
 }

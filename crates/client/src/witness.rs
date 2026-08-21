@@ -5,6 +5,7 @@ use crate::{
 use pir_protocol::p2p::P2PError;
 use pir_protocol::{YpirScenario, ZcashNetwork, DATASET_VERSION, IRONWOOD_POOL};
 use serde::Deserialize;
+use std::collections::{hash_map::Entry, HashMap};
 use thiserror::Error;
 use witness_pir::*;
 use ypir::client::YPIRClient;
@@ -153,77 +154,93 @@ impl WitnessClient {
     /// the cached broadcast data to reconstruct the full 32-level authentication
     /// path. Self-verifies the witness before returning.
     pub async fn get_witness(&self, position: u64) -> Result<PirWitness> {
-        let t0 = std::time::Instant::now();
-        let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
+        Ok(self
+            .get_witnesses(&[position])
+            .await?
+            .pop()
+            .expect("one position produces one witness"))
+    }
+
+    /// Fetch witnesses for multiple positions, querying each PIR row only once.
+    pub async fn get_witnesses(&self, positions: &[u64]) -> Result<Vec<PirWitness>> {
         let window_end = self
             .broadcast
             .window_start_shard
             .checked_add(self.broadcast.window_shard_count)
             .ok_or_else(|| WitnessClientError::InvalidParams("invalid PIR window".into()))?;
+        let mut decoded_rows = HashMap::new();
+        let mut witnesses = Vec::with_capacity(positions.len());
 
-        if shard_idx < self.broadcast.window_start_shard || shard_idx >= window_end {
-            return Err(WitnessClientError::PositionOutsideWindow(
+        for &position in positions {
+            let t0 = std::time::Instant::now();
+            let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
+            if shard_idx < self.broadcast.window_start_shard || shard_idx >= window_end {
+                return Err(WitnessClientError::PositionOutsideWindow(
+                    position,
+                    self.broadcast.window_start_shard,
+                    window_end,
+                ));
+            }
+
+            let row_idx =
+                physical_row_index(shard_idx, subshard_idx, self.broadcast.window_start_shard);
+
+            if let Entry::Vacant(row) = decoded_rows.entry(row_idx) {
+                row.insert(self.query_row(row_idx).await?);
+            }
+
+            let t4 = std::time::Instant::now();
+            let witness = reconstruct::reconstruct_witness(
                 position,
-                self.broadcast.window_start_shard,
-                window_end,
-            ));
+                shard_idx,
+                subshard_idx,
+                leaf_idx,
+                decoded_rows.get(&row_idx).expect("queried row is cached"),
+                &self.broadcast,
+            )?;
+            tracing::info!(
+                elapsed_ms = t4.elapsed().as_millis(),
+                total_ms = t0.elapsed().as_millis(),
+                position,
+                "witness reconstructed",
+            );
+            witnesses.push(witness);
         }
 
-        let row_idx =
-            physical_row_index(shard_idx, subshard_idx, self.broadcast.window_start_shard);
+        Ok(witnesses)
+    }
 
-        let t1 = std::time::Instant::now();
-        let (query_bytes, seed) = {
-            let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
-            (query.to_bytes(), seed)
-        };
+    async fn query_row(&self, row_idx: usize) -> Result<Vec<u8>> {
+        let t0 = std::time::Instant::now();
+        let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
+        let query_bytes = query.to_bytes();
         tracing::info!(
-            elapsed_ms = t1.elapsed().as_millis(),
+            elapsed_ms = t0.elapsed().as_millis(),
             query_bytes = query_bytes.len(),
             row_idx,
-            position,
             "query generated",
         );
 
-        let t2 = std::time::Instant::now();
-        let response_bytes = self
+        let t1 = std::time::Instant::now();
+        let response = self
             .transport
             .request(Operation::WitnessQuery, query_bytes)
             .await
             .map_err(map_transport_error)?;
         tracing::info!(
-            elapsed_ms = t2.elapsed().as_millis(),
-            response_bytes = response_bytes.len(),
+            elapsed_ms = t1.elapsed().as_millis(),
+            response_bytes = response.len(),
             "server response received",
         );
 
-        let t3 = std::time::Instant::now();
-        let decoded_row = self
-            .ypir_client
-            .decode_response_simplepir(seed, &response_bytes);
+        let t2 = std::time::Instant::now();
+        let row = self.ypir_client.decode_response_simplepir(seed, &response);
         tracing::info!(
-            elapsed_ms = t3.elapsed().as_millis(),
-            decoded_elements = decoded_row.len(),
+            elapsed_ms = t2.elapsed().as_millis(),
+            decoded_elements = row.len(),
             "response decoded",
         );
-
-        let t4 = std::time::Instant::now();
-        let witness = reconstruct::reconstruct_witness(
-            position,
-            shard_idx,
-            subshard_idx,
-            leaf_idx,
-            &decoded_row,
-            &self.broadcast,
-        )?;
-        tracing::info!(
-            elapsed_ms = t4.elapsed().as_millis(),
-            total_ms = t0.elapsed().as_millis(),
-            position,
-            "witness reconstructed",
-        );
-
-        Ok(witness)
+        Ok(row)
     }
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).
