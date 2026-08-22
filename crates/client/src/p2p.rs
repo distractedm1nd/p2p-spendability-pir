@@ -6,8 +6,12 @@ use pir_protocol::{
     ZcashNetwork,
 };
 use std::{
+    io::ErrorKind,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -370,9 +374,27 @@ impl Service for NoopService {
 
 pub struct P2pPirNode {
     endpoint: ZakuraEndpoint,
+    ephemeral_identity_dir: Option<PathBuf>,
 }
 
 impl P2pPirNode {
+    pub async fn spawn_ephemeral(
+        bootstrap_peers: Vec<String>,
+        zcash_network: ZcashNetwork,
+    ) -> Result<(Self, P2pPirClient), P2pClientError> {
+        let identity_dir = ephemeral_identity_dir()?;
+        match Self::spawn(identity_dir.clone(), bootstrap_peers, zcash_network).await {
+            Ok((mut node, client)) => {
+                node.ephemeral_identity_dir = Some(identity_dir);
+                Ok((node, client))
+            }
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(identity_dir);
+                Err(error)
+            }
+        }
+    }
+
     pub async fn spawn(
         identity_dir: PathBuf,
         bootstrap_peers: Vec<String>,
@@ -409,11 +431,48 @@ impl P2pPirNode {
         .await
         .map_err(|error| P2pClientError::Start(error.to_string()))?
         .ok_or_else(|| P2pClientError::Start("Zakura P2P is disabled".into()))?;
-        Ok((Self { endpoint }, client))
+        Ok((
+            Self {
+                endpoint,
+                ephemeral_identity_dir: None,
+            },
+            client,
+        ))
     }
 
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
         self.endpoint.shutdown().await;
+        if let Some(identity_dir) = self.ephemeral_identity_dir.take() {
+            let _ = tokio::fs::remove_dir_all(identity_dir).await;
+        }
+    }
+}
+
+fn ephemeral_identity_dir() -> Result<PathBuf, P2pClientError> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let path = std::env::temp_dir().join(format!(
+            "spendability-pir-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(error) =
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                    {
+                        let _ = std::fs::remove_dir(&path);
+                        return Err(P2pClientError::Start(error.to_string()));
+                    }
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(P2pClientError::Start(error.to_string())),
+        }
     }
 }
 
@@ -426,6 +485,17 @@ mod tests {
         serialize::ToBytes,
     };
     use zakura_network::zakura::framed_channel;
+
+    #[test]
+    fn ephemeral_identity_directories_are_unique() {
+        let first = ephemeral_identity_dir().unwrap();
+        let second = ephemeral_identity_dir().unwrap();
+        assert_ne!(first, second);
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+        std::fs::remove_dir(first).unwrap();
+        std::fs::remove_dir(second).unwrap();
+    }
 
     #[test]
     fn current_queries_fit_message_limit() {
