@@ -32,6 +32,7 @@ impl LwdClient {
     /// Connect to the first reachable endpoint from the given list.
     /// Automatically enables TLS for `https://` endpoints.
     pub async fn connect(endpoints: &[String]) -> Result<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         for endpoint in endpoints {
             let result = if endpoint.starts_with("https://") {
                 let tls = ClientTlsConfig::new().with_native_roots();

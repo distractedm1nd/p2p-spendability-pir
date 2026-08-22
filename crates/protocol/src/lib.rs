@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
+pub mod p2p;
+
 /// Blocks behind the tip at which the PIR server anchors its database state.
 /// Shared by both nullifier and witness PIR servers. Deep enough (10) to survive
 /// typical reorgs while still being fresh enough for practical spending.

@@ -1,5 +1,11 @@
+use crate::{
+    p2p::{P2pClientError, P2pPirSession},
+    transport::{Operation, PirTransport, TransportError},
+};
+use pir_protocol::p2p::P2PError;
 use pir_protocol::{YpirScenario, ZcashNetwork, DATASET_VERSION, IRONWOOD_POOL};
 use serde::Deserialize;
+use std::collections::{hash_map::Entry, HashMap};
 use thiserror::Error;
 use witness_pir::*;
 use ypir::client::YPIRClient;
@@ -12,6 +18,8 @@ pub use crate::reconstruct;
 pub enum WitnessClientError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("P2P error: {0}")]
+    P2p(#[from] P2pClientError),
     #[error("server unavailable (503)")]
     ServerUnavailable,
     #[error("invalid params from server: {0}")]
@@ -34,8 +42,7 @@ struct Metadata {
 }
 
 pub struct WitnessClient {
-    http: reqwest::Client,
-    base_url: String,
+    transport: PirTransport,
     #[allow(dead_code)]
     scenario: YpirScenario,
     broadcast: BroadcastData,
@@ -47,17 +54,25 @@ impl WitnessClient {
     /// the PIR client. The broadcast download is ~104 KB and cached for the
     /// lifetime of this client.
     pub async fn connect(url: &str, zcash_network: ZcashNetwork) -> Result<Self> {
-        let t0 = std::time::Instant::now();
-        let base_url = url.trim_end_matches('/').to_string();
-        let http = reqwest::Client::new();
+        Self::connect_with_transport(PirTransport::http(url), zcash_network).await
+    }
 
-        let metadata: Metadata = http
-            .get(format!("{base_url}/metadata"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+    pub async fn connect_p2p(session: P2pPirSession, zcash_network: ZcashNetwork) -> Result<Self> {
+        Self::connect_with_transport(PirTransport::Zakura(session), zcash_network).await
+    }
+
+    async fn connect_with_transport(
+        transport: PirTransport,
+        zcash_network: ZcashNetwork,
+    ) -> Result<Self> {
+        let t0 = std::time::Instant::now();
+        let metadata: Metadata = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessMetadata, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         if metadata.zcash_network != zcash_network
             || metadata.commitment_pool != IRONWOOD_POOL
             || metadata.dataset_version != DATASET_VERSION
@@ -67,13 +82,13 @@ impl WitnessClient {
             ));
         }
 
-        let scenario: YpirScenario = http
-            .get(format!("{base_url}/params"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let scenario: YpirScenario = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessParams, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         if scenario.num_items != L0_DB_ROWS as u64
             || scenario.item_size_bits != (SUBSHARD_ROW_BYTES * 8) as u64
             || scenario.poly_len != YPIR_POLY_LEN
@@ -85,11 +100,13 @@ impl WitnessClient {
         tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "fetched /params");
 
         let t1 = std::time::Instant::now();
-        let broadcast_resp = http.get(format!("{base_url}/broadcast")).send().await?;
-        if broadcast_resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-        let broadcast: BroadcastData = broadcast_resp.error_for_status()?.json().await?;
+        let broadcast: BroadcastData = serde_json::from_slice(
+            &transport
+                .request(Operation::WitnessBroadcast, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         tracing::info!(
             elapsed_ms = t1.elapsed().as_millis(),
             broadcast_bytes = serde_json::to_vec(&broadcast).map(|v| v.len()).unwrap_or(0),
@@ -114,7 +131,6 @@ impl WitnessClient {
         );
 
         tracing::info!(
-            base_url,
             total_connect_ms = t0.elapsed().as_millis(),
             anchor_height = broadcast.anchor_height,
             window_start = broadcast.window_start_shard,
@@ -124,8 +140,7 @@ impl WitnessClient {
         );
 
         Ok(Self {
-            http,
-            base_url,
+            transport,
             scenario,
             broadcast,
             ypir_client,
@@ -139,103 +154,105 @@ impl WitnessClient {
     /// the cached broadcast data to reconstruct the full 32-level authentication
     /// path. Self-verifies the witness before returning.
     pub async fn get_witness(&self, position: u64) -> Result<PirWitness> {
-        let t0 = std::time::Instant::now();
-        let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
+        Ok(self
+            .get_witnesses(&[position])
+            .await?
+            .pop()
+            .expect("one position produces one witness"))
+    }
+
+    /// Fetch witnesses for multiple positions, querying each PIR row only once.
+    pub async fn get_witnesses(&self, positions: &[u64]) -> Result<Vec<PirWitness>> {
         let window_end = self
             .broadcast
             .window_start_shard
             .checked_add(self.broadcast.window_shard_count)
             .ok_or_else(|| WitnessClientError::InvalidParams("invalid PIR window".into()))?;
+        let mut decoded_rows = HashMap::new();
+        let mut witnesses = Vec::with_capacity(positions.len());
 
-        if shard_idx < self.broadcast.window_start_shard || shard_idx >= window_end {
-            return Err(WitnessClientError::PositionOutsideWindow(
+        for &position in positions {
+            let t0 = std::time::Instant::now();
+            let (shard_idx, subshard_idx, leaf_idx) = decompose_position(position);
+            if shard_idx < self.broadcast.window_start_shard || shard_idx >= window_end {
+                return Err(WitnessClientError::PositionOutsideWindow(
+                    position,
+                    self.broadcast.window_start_shard,
+                    window_end,
+                ));
+            }
+
+            let row_idx =
+                physical_row_index(shard_idx, subshard_idx, self.broadcast.window_start_shard);
+
+            if let Entry::Vacant(row) = decoded_rows.entry(row_idx) {
+                row.insert(self.query_row(row_idx).await?);
+            }
+
+            let t4 = std::time::Instant::now();
+            let witness = reconstruct::reconstruct_witness(
                 position,
-                self.broadcast.window_start_shard,
-                window_end,
-            ));
+                shard_idx,
+                subshard_idx,
+                leaf_idx,
+                decoded_rows.get(&row_idx).expect("queried row is cached"),
+                &self.broadcast,
+            )?;
+            tracing::info!(
+                elapsed_ms = t4.elapsed().as_millis(),
+                total_ms = t0.elapsed().as_millis(),
+                position,
+                "witness reconstructed",
+            );
+            witnesses.push(witness);
         }
 
-        let row_idx =
-            physical_row_index(shard_idx, subshard_idx, self.broadcast.window_start_shard);
+        Ok(witnesses)
+    }
 
-        let t1 = std::time::Instant::now();
-        let (query_bytes, seed) = {
-            let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
-            (query.to_bytes(), seed)
-        };
+    async fn query_row(&self, row_idx: usize) -> Result<Vec<u8>> {
+        let t0 = std::time::Instant::now();
+        let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
+        let query_bytes = query.to_bytes();
         tracing::info!(
-            elapsed_ms = t1.elapsed().as_millis(),
+            elapsed_ms = t0.elapsed().as_millis(),
             query_bytes = query_bytes.len(),
             row_idx,
-            position,
             "query generated",
         );
 
-        let t2 = std::time::Instant::now();
-        let resp = self
-            .http
-            .post(format!("{}/query", self.base_url))
-            .body(query_bytes)
-            .send()
-            .await?;
-
-        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-
-        let response_bytes = resp
-            .error_for_status()
-            .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?
-            .bytes()
-            .await?;
+        let t1 = std::time::Instant::now();
+        let response = self
+            .transport
+            .request(Operation::WitnessQuery, query_bytes)
+            .await
+            .map_err(map_transport_error)?;
         tracing::info!(
-            elapsed_ms = t2.elapsed().as_millis(),
-            response_bytes = response_bytes.len(),
+            elapsed_ms = t1.elapsed().as_millis(),
+            response_bytes = response.len(),
             "server response received",
         );
 
-        let t3 = std::time::Instant::now();
-        let decoded_row = self
-            .ypir_client
-            .decode_response_simplepir(seed, &response_bytes);
+        let t2 = std::time::Instant::now();
+        let row = self.ypir_client.decode_response_simplepir(seed, &response);
         tracing::info!(
-            elapsed_ms = t3.elapsed().as_millis(),
-            decoded_elements = decoded_row.len(),
+            elapsed_ms = t2.elapsed().as_millis(),
+            decoded_elements = row.len(),
             "response decoded",
         );
-
-        let t4 = std::time::Instant::now();
-        let witness = reconstruct::reconstruct_witness(
-            position,
-            shard_idx,
-            subshard_idx,
-            leaf_idx,
-            &decoded_row,
-            &self.broadcast,
-        )?;
-        tracing::info!(
-            elapsed_ms = t4.elapsed().as_millis(),
-            total_ms = t0.elapsed().as_millis(),
-            position,
-            "witness reconstructed",
-        );
-
-        Ok(witness)
+        Ok(row)
     }
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).
     pub async fn refresh_broadcast(&mut self) -> Result<()> {
-        let resp = self
-            .http
-            .get(format!("{}/broadcast", self.base_url))
-            .send()
-            .await?;
-
-        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-
-        self.broadcast = resp.error_for_status()?.json().await?;
+        self.broadcast = serde_json::from_slice(
+            &self
+                .transport
+                .request(Operation::WitnessBroadcast, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| WitnessClientError::InvalidParams(error.to_string()))?;
         Ok(())
     }
 
@@ -245,6 +262,17 @@ impl WitnessClient {
 
     pub fn broadcast(&self) -> &BroadcastData {
         &self.broadcast
+    }
+}
+
+fn map_transport_error(error: TransportError) -> WitnessClientError {
+    match error {
+        TransportError::Http(error) => WitnessClientError::Http(error),
+        TransportError::Unavailable
+        | TransportError::P2p(P2pClientError::Remote(P2PError::ServiceUnavailable)) => {
+            WitnessClientError::ServerUnavailable
+        }
+        TransportError::P2p(error) => WitnessClientError::P2p(error),
     }
 }
 

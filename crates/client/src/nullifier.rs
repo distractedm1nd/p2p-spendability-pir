@@ -1,7 +1,12 @@
+use crate::{
+    p2p::{P2pClientError, P2pPirSession},
+    transport::{Operation, PirTransport, TransportError},
+};
 use nullifier_pir::{
     hash_to_bucket, Nullifier, SpendabilityMetadata, YpirScenario, ZcashNetwork, BUCKET_BYTES,
     ENTRY_BYTES, NUM_BUCKETS, YPIR_POLY_LEN,
 };
+use pir_protocol::p2p::P2PError;
 use thiserror::Error;
 use ypir::client::YPIRClient;
 use ypir::params::{params_for_scenario_simplepir_with_config, YPIRSPConfig};
@@ -11,6 +16,8 @@ use ypir::serialize::ToBytes;
 pub enum SpendClientError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("P2P error: {0}")]
+    P2p(#[from] P2pClientError),
     #[error("server unavailable")]
     ServerUnavailable,
     #[error("invalid params: {0}")]
@@ -22,8 +29,7 @@ pub enum SpendClientError {
 pub type Result<T> = std::result::Result<T, SpendClientError>;
 
 pub struct SpendClient {
-    http: reqwest::Client,
-    base_url: String,
+    transport: PirTransport,
     scenario: YpirScenario,
     metadata: SpendabilityMetadata,
     ypir_client: YPIRClient,
@@ -31,22 +37,31 @@ pub struct SpendClient {
 
 impl SpendClient {
     pub async fn connect(url: &str, zcash_network: ZcashNetwork) -> Result<Self> {
-        let base_url = url.trim_end_matches('/').to_string();
-        let http = reqwest::Client::new();
-        let scenario: YpirScenario = http
-            .get(format!("{base_url}/params"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        let metadata: SpendabilityMetadata = http
-            .get(format!("{base_url}/metadata"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        Self::connect_with_transport(PirTransport::http(url), zcash_network).await
+    }
+
+    pub async fn connect_p2p(session: P2pPirSession, zcash_network: ZcashNetwork) -> Result<Self> {
+        Self::connect_with_transport(PirTransport::Zakura(session), zcash_network).await
+    }
+
+    async fn connect_with_transport(
+        transport: PirTransport,
+        zcash_network: ZcashNetwork,
+    ) -> Result<Self> {
+        let scenario: YpirScenario = serde_json::from_slice(
+            &transport
+                .request(Operation::NullifierParams, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| SpendClientError::InvalidParams(error.to_string()))?;
+        let metadata: SpendabilityMetadata = serde_json::from_slice(
+            &transport
+                .request(Operation::NullifierMetadata, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| SpendClientError::InvalidParams(error.to_string()))?;
 
         validate_metadata(&metadata, zcash_network)?;
         if scenario.num_items != NUM_BUCKETS as u64
@@ -66,8 +81,7 @@ impl SpendClient {
         );
         let ypir_client = YPIRClient::new(&params);
         Ok(Self {
-            http,
-            base_url,
+            transport,
             scenario,
             metadata,
             ypir_client,
@@ -78,33 +92,24 @@ impl SpendClient {
         let (query, seed) = self
             .ypir_client
             .generate_query_simplepir(hash_to_bucket(nf) as usize);
-        let response = self
-            .http
-            .post(format!("{}/query", self.base_url))
-            .body(query.to_bytes())
-            .send()
-            .await?;
-        if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(SpendClientError::ServerUnavailable);
-        }
-        let bytes = response
-            .error_for_status()
-            .map_err(|error| SpendClientError::QueryFailed(error.to_string()))?
-            .bytes()
-            .await?;
+        let bytes = self
+            .transport
+            .request(Operation::NullifierQuery, query.to_bytes())
+            .await
+            .map_err(map_transport_error)?;
         let row = self.ypir_client.decode_response_simplepir(seed, &bytes);
         Ok(bucket_contains(&row, nf))
     }
 
     pub async fn refresh_metadata(&mut self) -> Result<()> {
-        let metadata = self
-            .http
-            .get(format!("{}/metadata", self.base_url))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let metadata = serde_json::from_slice(
+            &self
+                .transport
+                .request(Operation::NullifierMetadata, vec![])
+                .await
+                .map_err(map_transport_error)?,
+        )
+        .map_err(|error| SpendClientError::InvalidParams(error.to_string()))?;
         validate_metadata(&metadata, self.metadata.zcash_network)?;
         self.metadata = metadata;
         Ok(())
@@ -124,6 +129,17 @@ impl SpendClient {
 
     pub fn scenario(&self) -> &YpirScenario {
         &self.scenario
+    }
+}
+
+fn map_transport_error(error: TransportError) -> SpendClientError {
+    match error {
+        TransportError::Http(error) => SpendClientError::Http(error),
+        TransportError::Unavailable
+        | TransportError::P2p(P2pClientError::Remote(P2PError::ServiceUnavailable)) => {
+            SpendClientError::ServerUnavailable
+        }
+        TransportError::P2p(error) => SpendClientError::P2p(error),
     }
 }
 
